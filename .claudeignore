@@ -1,0 +1,21 @@
+# Virtual Environments & Dependencies
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Docker & Database
+.docker/
+*.db
+*.sqlite3
+
+# Version Control & IDE
+.git/
+.vscode/
+.idea/
+
+# Secret files
+.env
+.env.*
+*.pem
+*.key

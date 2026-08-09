@@ -1,0 +1,20 @@
+{
+  "allowedTools": [
+    "View",
+    "Edit",
+    "GlobTool",
+    "GrepTool",
+    "LS"
+  ],
+  "autoApprove": [
+    "git status",
+    "git diff",
+    "docker compose ps",
+    "pytest"
+  ],
+  "denyCommands": [
+    "docker compose down -v",
+    "rm -rf *",
+    "git push --force"
+  ]
+}

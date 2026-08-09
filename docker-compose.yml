@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Database
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: scrappy_recipes_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret_db_password_123}
+      POSTGRES_DB: postgres  # Base administrative DB name
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. FastAPI Application Container
+  app:
+    build: .
+    container_name: scrappy_recipes_app
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      # We construct the connection string dynamically using environment variables!
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-secret_db_password_123}@db:5432/scrappy_recipes
+      - ADMIN_DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-secret_db_password_123}@db:5432/postgres
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

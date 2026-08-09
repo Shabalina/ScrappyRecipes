@@ -1,0 +1,40 @@
+# Ignore python temporary files
+__pycache__/
+*.pyc
+.env
+
+# Ignore Mac system files
+.DS_Store
+
+# Ignore local virtual environments
+venv/
+.venv/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# IPython history and config
+.ipython/
+profile_default/
+ipython_config.py
+
+# Local terraform directory
+**/.terraform/*
+
+# State files
+*.tfstate
+*.tfstate.*
+
+# Variables files (might contain secrets)
+*.tfvars
+*.tfvars.json
+
+# Crash logs
+crash.log
+
+# Ignore Streamlit secrets, but allow configuration
+**/.streamlit/secrets.toml
+
+python/
+deps_layer.zip

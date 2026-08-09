@@ -1,0 +1,26 @@
+# AI Engine Client SDKs
+google-genai
+openai
+
+# Data Validation & Schema Modeling
+pydantic
+
+# Web API Framework & Production Server
+fastapi
+uvicorn
+
+# Environment Configuration Manager
+python-dotenv
+
+# Web Scraping & HTML Parsing
+beautifulsoup4
+httpx
+h2
+
+python-multipart
+
+# Vector Database Support
+pgvector>=0.2.0
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
+alembic>=1.13.0
