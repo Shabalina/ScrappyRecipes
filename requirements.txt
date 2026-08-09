@@ -19,6 +19,10 @@ h2
 
 python-multipart
 
+# Testing (mocked unit/integration suite — no live API calls)
+pytest
+pytest-asyncio
+
 # Vector Database Support
 pgvector>=0.2.0
 sqlalchemy[asyncio]>=2.0.0

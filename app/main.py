@@ -10,8 +10,9 @@ load_dotenv()
 
 from app.database import Base, engine, get_db
 from app.models import RecipeModel
-from app.schemas import ParseTextRequest, ParseUrlRequest, RecipeRead
+from app.schemas import ParseTextRequest, ParseUrlRequest, RecipeCreate, RecipeRead
 from app.services.embedding_service import generate_embedding
+from app.services.recipe_db_service import RecipeDatabaseService
 from app.services.router_service import LLMRouterService
 
 # --- 1. Lifespan Handler for DB Table Creation ---
@@ -47,30 +48,34 @@ async def health_check():
     return {"status": "ok", "service": "Recipe Extraction Engine"}
 
 
-# --- Recipe Parsing Endpoints ---
+# --- Recipe Parsing Endpoints (draft only — nothing is persisted here) ---
+#
+# These return an unsaved RecipeCreate draft. The client reviews/edits it and
+# POSTs it to /api/v1/recipes/confirm to persist. Status is 200 OK, not 201
+# CREATED, because no resource is created and there is no id to return yet.
 
 @app.post(
-    "/api/v1/recipes/parse-text", 
-    response_model=RecipeRead, 
-    status_code=status.HTTP_201_CREATED
+    "/api/v1/recipes/parse-text",
+    response_model=RecipeCreate,
+    status_code=status.HTTP_200_OK
 )
-async def parse_text(payload: ParseTextRequest, db: AsyncSession = Depends(get_db)):
-    """Parse raw copied text and save to DB."""
+async def parse_text(payload: ParseTextRequest):
+    """Parse raw copied text into an unsaved draft."""
     try:
-        return await router_service.route_and_parse(raw_text=payload.text, db=db)
+        return await router_service.route_and_parse(raw_text=payload.text)
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @app.post(
-    "/api/v1/recipes/parse-url", 
-    response_model=RecipeRead, 
-    status_code=status.HTTP_201_CREATED
+    "/api/v1/recipes/parse-url",
+    response_model=RecipeCreate,
+    status_code=status.HTTP_200_OK
 )
-async def parse_url(payload: ParseUrlRequest, db: AsyncSession = Depends(get_db)):
-    """Scrape web URL, parse recipe, and save to DB."""
+async def parse_url(payload: ParseUrlRequest):
+    """Scrape a web URL and parse it into an unsaved draft."""
     try:
-        return await router_service.route_and_parse(url=str(payload.url), db=db)
+        return await router_service.route_and_parse(url=str(payload.url))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
@@ -78,15 +83,14 @@ async def parse_url(payload: ParseUrlRequest, db: AsyncSession = Depends(get_db)
 
 
 @app.post(
-    "/api/v1/recipes/parse-images", 
-    response_model=RecipeRead, 
-    status_code=status.HTTP_201_CREATED
+    "/api/v1/recipes/parse-images",
+    response_model=RecipeCreate,
+    status_code=status.HTTP_200_OK
 )
 async def parse_images(
     files: Annotated[List[UploadFile], File(description="Recipe screenshots")],
-    db: AsyncSession = Depends(get_db)
 ):
-    """Parse screenshot images and save to DB."""
+    """Parse screenshot images into an unsaved draft."""
     if not files:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one image required.")
 
@@ -95,12 +99,36 @@ async def parse_images(
 
     try:
         return await router_service.route_and_parse(
-            image_bytes_list=image_bytes_list, 
-            mime_type=mime_type, 
-            db=db
+            image_bytes_list=image_bytes_list,
+            mime_type=mime_type
         )
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Image error: {str(e)}")
+
+
+# --- Confirmation Endpoint (the only write path for new recipes) ---
+
+@app.post(
+    "/api/v1/recipes/confirm",
+    response_model=RecipeRead,
+    status_code=status.HTTP_201_CREATED
+)
+async def confirm_recipe(payload: RecipeCreate, db: AsyncSession = Depends(get_db)):
+    """Persist a reviewed draft, generating its vector embedding on the way in.
+
+    The body is a full RecipeCreate — normally a draft from one of the parse
+    endpoints, optionally corrected by the user first. Nothing is carried over
+    server-side between parsing and confirming, so any edits the client made are
+    what gets stored.
+    """
+    try:
+        db_service = RecipeDatabaseService(db)
+        return await db_service.save_parsed_recipe(payload)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not save recipe: {str(e)}"
+        )
 
 
 # --- Vector Search Endpoint ---

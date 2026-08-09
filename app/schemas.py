@@ -27,12 +27,13 @@ class RecipeCreate(BaseModel):
     )
 
 class RecipeRead(RecipeCreate):
+    """A persisted recipe as returned to clients.
+
+    The pgvector `embedding` column is deliberately NOT exposed: it is 1536
+    floats (~25KB of JSON) per row, no client consumes it, and including it in
+    list responses like /search multiplies payload size for no benefit.
+    """
     id: int
-    # Optional list of floats representing the vector (e.g. 1536 numbers for OpenAI)
-    embedding: Optional[List[float]] = Field(
-        None, 
-        description="Vector representation for semantic search and RAG retrieval."
-    )
 
     class Config:
         from_attributes = True

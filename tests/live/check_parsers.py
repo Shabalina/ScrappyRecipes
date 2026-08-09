@@ -1,12 +1,21 @@
 import asyncio
 import os
+import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
+
+# Run this file directly from anywhere: put the project root on sys.path so
+# `app` resolves, and anchor fixture paths to this directory instead of cwd.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+IMAGES_DIR = Path(__file__).resolve().parent.parent / "test_images"
+sys.path.insert(0, str(PROJECT_ROOT))
+
 from app.schemas import RecipeCreate
-# Assuming your consolidation file is named 'parser_service.py' inside app/services/
 from app.services.llm_parser import RecipeParserService
 
 # Load local .env file to expose GEMINI_API_KEY and OPENAI_API_KEY
-load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env")
 
 async def test_text_parser(parser: RecipeParserService):
     print("\n--- Testing OpenAI Text Parser (gpt-4o-mini) ---")
@@ -31,10 +40,10 @@ async def test_text_parser(parser: RecipeParserService):
         print(f"❌ OpenAI Text Parsing Failed: {e}")
 
 async def test_image_parser(parser: RecipeParserService):
-    print("\n--- Testing Gemini Multi-Image Parser (gemini-1.5-flash) ---")
+    print("\n--- Testing Gemini Multi-Image Parser (gemini-3.5-flash) ---")
     
     # 1. Define the paths for your multi-page recipe screenshots
-    image_paths = ["test_images/recipe_page1.jpeg", "test_images/recipe_page2.jpeg"]
+    image_paths = [IMAGES_DIR / "recipe_page1.jpeg", IMAGES_DIR / "recipe_page2.jpeg"]
     image_bytes_list = []
 
     # 2. Loop through and read the bytes for each image file

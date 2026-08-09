@@ -1,11 +1,8 @@
 from typing import List, Optional
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas import RecipeCreate
-from app.models import RecipeModel
 from app.services.llm_parser import RecipeParserService
 from app.services.scraper_service import RecipeScraperService
-from app.services.recipe_db_service import RecipeDatabaseService
 
 class LLMRouterService:
     def __init__(self):
@@ -20,14 +17,17 @@ class LLMRouterService:
         image_bytes_list: Optional[List[bytes]] = None,
         mime_type: str = "image/jpeg",
         url: Optional[str] = None,  # Added URL parameter
-        db: Optional[AsyncSession] = None,
-    ) -> RecipeModel | RecipeCreate:
+    ) -> RecipeCreate:
         """
         Dynamic Router Gatekeeper:
         - If URL provided              -> Scrapes HTML to clean text -> Routes to GPT-4o-Mini
         - If image bytes provided      -> Routes to Gemini Multimodal
         - If raw text provided         -> Routes to GPT-4o-Mini
-        Automatically persists input to PostgreSQL if a database session is provided.
+
+        Returns an unsaved RecipeCreate draft. Persistence and embedding
+        generation are deliberately NOT done here — the client reviews (and may
+        edit) the draft, then POSTs it to /api/v1/recipes/confirm. This keeps
+        embedding spend off drafts that are never approved.
         """
         parsed_recipe: RecipeCreate
 
@@ -53,12 +53,5 @@ class LLMRouterService:
         else:
             # Raise value error if invalid payload provided
             raise ValueError("Invalid input payload: Neither valid text, URL, nor image bytes were provided to the router.")
-
-        # --- DB Persistence & Vector Embedding Step ---
-        if db:
-            print("💾 [Router]: Persisting recipe & vector embeddings to PostgreSQL...")
-            db_service = RecipeDatabaseService(db)
-            saved_recipe = await db_service.save_parsed_recipe(parsed_recipe)
-            return saved_recipe
 
         return parsed_recipe
