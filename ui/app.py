@@ -8,6 +8,13 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 st.set_page_config(page_title="Scrappy Recipes", layout="centered")
 st.title("Scrappy Recipes")
 
+# A widget's session_state key can't be reassigned after the widget has been
+# instantiated in the same run, so a cross-tab "send this URL over" action
+# stages the value here and applies it before the URL tab's text_input renders.
+if "pending_recipe_url" in st.session_state:
+    st.session_state["recipe_url_input"] = st.session_state.pop("pending_recipe_url")
+    st.session_state["url_prefill_notice"] = True
+
 
 def render_draft_preview(draft):
     st.divider()
@@ -64,7 +71,15 @@ with ingestion_tab:
     with url_tab:
         st.subheader("Parse a recipe from a URL")
 
-        recipe_url = st.text_input("Recipe URL", placeholder="https://example.com/my-recipe")
+        if st.session_state.pop("url_prefill_notice", False):
+            st.info("URL loaded from the Search tab's web results.")
+
+        st.session_state.setdefault("recipe_url_input", "")
+        recipe_url = st.text_input(
+            "Recipe URL",
+            placeholder="https://example.com/my-recipe",
+            key="recipe_url_input",
+        )
 
         if st.button("Parse URL", key="parse_url_button"):
             if not recipe_url.strip():
@@ -166,7 +181,101 @@ with ingestion_tab:
             save_draft(draft, "draft_recipe_images", "approve_save_images_button")
 
 with search_tab:
-    st.info("Coming soon.")
+    st.subheader("Search your saved recipes")
+
+    def match_quality_label(distance):
+        if distance <= 0.3:
+            return "Excellent"
+        elif distance <= 0.45:
+            return "Good"
+        elif distance <= 0.6:
+            return "Moderate"
+        else:
+            return "Weak"
+
+    search_query = st.text_input(
+        "What are you in the mood for?",
+        placeholder="e.g. cold summer soup",
+        key="local_search_query",
+    )
+
+    if st.button("Search Local Recipes", key="search_local_button"):
+        if not search_query.strip():
+            st.warning("Enter a search query first.")
+        else:
+            with st.spinner("Searching local recipes..."):
+                try:
+                    response = requests.get(
+                        f"{API_BASE_URL}/api/v1/recipes/search",
+                        params={"q": search_query.strip(), "limit": 1},
+                        timeout=30,
+                    )
+                    response.raise_for_status()
+                    results = response.json()
+                    st.session_state["local_search_result"] = results[0] if results else None
+                    st.session_state.pop("web_search_results", None)
+                except requests.exceptions.HTTPError:
+                    detail = response.json().get("detail", response.text)
+                    st.error(f"Search failed: {detail}")
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Request failed: {e}")
+
+    if "local_search_result" in st.session_state:
+        result = st.session_state["local_search_result"]
+
+        if result is None:
+            st.info("No recipes found in your local database yet.")
+        else:
+            quality = match_quality_label(result["distance"])
+            st.success(f"Distance: {result['distance']:.2f} | Match Quality: {quality}")
+            render_draft_preview(result)
+
+            if st.button("Delete Recipe", key=f"delete_recipe_{result['id']}"):
+                with st.spinner("Deleting recipe..."):
+                    try:
+                        del_response = requests.delete(
+                            f"{API_BASE_URL}/api/v1/recipes/{result['id']}",
+                            timeout=30,
+                        )
+                        del_response.raise_for_status()
+                        st.success(f"Deleted recipe #{result['id']}.")
+                        st.session_state.pop("local_search_result", None)
+                        st.rerun()
+                    except requests.exceptions.HTTPError:
+                        detail = del_response.json().get("detail", del_response.text)
+                        st.error(f"Failed to delete recipe: {detail}")
+                    except requests.exceptions.RequestException as e:
+                        st.error(f"Request failed: {e}")
+
+        st.divider()
+        st.markdown("**Not what you were looking for?**")
+        if st.button("Search Web for this Query", key="search_web_button"):
+            with st.spinner("Searching the web..."):
+                try:
+                    web_response = requests.get(
+                        f"{API_BASE_URL}/api/v1/recipes/search-web",
+                        params={"query": search_query.strip()},
+                        timeout=30,
+                    )
+                    web_response.raise_for_status()
+                    st.session_state["web_search_results"] = web_response.json()
+                except requests.exceptions.HTTPError:
+                    detail = web_response.json().get("detail", web_response.text)
+                    st.error(f"Web search failed: {detail}")
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Request failed: {e}")
+
+    web_results = st.session_state.get("web_search_results")
+    if web_results:
+        st.markdown("**Web results**")
+        for i, hit in enumerate(web_results):
+            st.markdown(f"**[{hit['title']}]({hit['url']})**")
+            st.caption(hit["snippet"])
+            if st.button("Parse this Recipe", key=f"parse_web_result_{i}"):
+                st.session_state["pending_recipe_url"] = hit["url"]
+                st.session_state.pop("web_search_results", None)
+                st.rerun()
+            st.divider()
 
 with meal_plan_tab:
     st.info("Coming soon.")

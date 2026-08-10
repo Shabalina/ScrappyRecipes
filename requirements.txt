@@ -17,6 +17,9 @@ beautifulsoup4
 httpx
 h2
 
+# Web Search Fallback
+ddgs
+
 python-multipart
 
 # Testing (mocked unit/integration suite — no live API calls)

@@ -275,6 +275,94 @@ class TestDeleteRecipe:
         api.delete.assert_not_awaited()
 
 
+class TestLocalSearch:
+    ROUTE = "/api/v1/recipes/search"
+
+    def _mock_search(self, monkeypatch, api, rows):
+        """rows: list of (row, distance) tuples, as pgvector's ORDER BY <=> returns them."""
+        import app.main as main
+
+        monkeypatch.setattr(main, "generate_embedding", AsyncMock(return_value=[0.1] * 1536))
+        api.db.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
+
+    def test_returns_top_result_with_distance(self, api, monkeypatch, sample_recipe):
+        row = saved_row_from(sample_recipe, row_id=7)
+        self._mock_search(monkeypatch, api, [(row, 0.2913695694660686)])
+
+        r = api.client.get(self.ROUTE, params={"q": "mushroom tart", "limit": 1})
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert len(body) == 1
+        assert body[0]["id"] == 7
+        assert body[0]["distance"] == pytest.approx(0.2913695694660686)
+
+    def test_response_omits_the_embedding(self, api, monkeypatch, sample_recipe):
+        row = saved_row_from(sample_recipe, row_id=7)
+        self._mock_search(monkeypatch, api, [(row, 0.3)])
+
+        r = api.client.get(self.ROUTE, params={"q": "anything"})
+
+        assert "embedding" not in r.json()[0]
+
+    def test_no_rows_returns_empty_list(self, api, monkeypatch):
+        self._mock_search(monkeypatch, api, [])
+
+        r = api.client.get(self.ROUTE, params={"q": "nothing like this exists"})
+
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_blank_query_is_400(self, api):
+        r = api.client.get(self.ROUTE, params={"q": "   "})
+
+        assert r.status_code == 400
+
+    def test_search_failure_is_500(self, api, monkeypatch):
+        import app.main as main
+
+        monkeypatch.setattr(main, "generate_embedding", AsyncMock(side_effect=RuntimeError("openai down")))
+
+        r = api.client.get(self.ROUTE, params={"q": "lasagna"})
+
+        assert r.status_code == 500
+        assert "Search failed" in r.json()["detail"]
+
+
+class TestSearchWeb:
+    ROUTE = "/api/v1/recipes/search-web"
+
+    def test_returns_top_results(self, api, monkeypatch):
+        import app.main as main
+
+        rows = [
+            {"title": "Best Lasagna", "url": "https://example.com/lasagna", "snippet": "A classic."},
+        ]
+        search = MagicMock(return_value=rows)
+        monkeypatch.setattr(main, "search_recipes_web", search)
+
+        r = api.client.get(self.ROUTE, params={"query": "lasagna"})
+
+        assert r.status_code == 200, r.text
+        assert r.json() == rows
+        search.assert_called_once_with("lasagna", max_results=3)
+
+    def test_blank_query_is_400(self, api):
+        r = api.client.get(self.ROUTE, params={"query": "   "})
+
+        assert r.status_code == 400
+
+    def test_search_failure_is_500(self, api, monkeypatch):
+        import app.main as main
+
+        monkeypatch.setattr(main, "search_recipes_web", MagicMock(side_effect=RuntimeError("ddgs down")))
+
+        r = api.client.get(self.ROUTE, params={"query": "lasagna"})
+
+        assert r.status_code == 500
+        assert "Web search failed" in r.json()["detail"]
+
+
 class TestUnchangedEndpoints:
     def test_health_still_ok(self, api):
         r = api.client.get("/health")

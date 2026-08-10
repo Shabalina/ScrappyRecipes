@@ -11,6 +11,8 @@ Scrappy Recipes is an AI-powered recipe extraction and semantic search service b
   * OpenAI `gpt-4o-mini` for text recipe parsing — `app/services/llm_parser.py`
   * Gemini `gemini-3.5-flash` for vision/multimodal image parsing — `app/services/llm_parser.py`
     (verified working 2026-08-09)
+* **Web Search Fallback:** DuckDuckGo via `ddgs` (`DDGS().text(...)`) — `app/services/web_search_service.py`
+* **UI:** Streamlit single-page app — `ui/app.py` (talks to the API over HTTP, no direct DB access)
 * **Containerisation:** Docker Compose (`scrappy_recipes_app`, `scrappy_recipes_db`)
 
 ---
@@ -31,7 +33,7 @@ Scrappy Recipes is an AI-powered recipe extraction and semantic search service b
 
 ### Testing
 `tests/` is a **pytest suite with every LLM and HTTP call mocked** — it needs no API keys, makes
-no network requests, and costs nothing. 70 tests, ~3s.
+no network requests, and costs nothing. 81 tests, ~3s.
 
 * **Run everything:** `venv/bin/python -m pytest`
 * **One file:** `venv/bin/python -m pytest tests/test_router.py`
@@ -75,7 +77,8 @@ loudly on a stub instead of quietly billing a real request.
 │       ├── llm_parser.py           # RecipeParserService: text (OpenAI) + image (Gemini) parsing
 │       ├── recipe_db_service.py    # Recipe persistence helpers (save + delete)
 │       ├── router_service.py       # LLMRouterService for text, url, image routing
-│       └── scraper_service.py      # URL fetching & HTML extraction
+│       ├── scraper_service.py      # URL fetching & HTML extraction
+│       └── web_search_service.py   # search_recipes_web() — DuckDuckGo (ddgs) top-3 lookup
 ├── tests/                          # Mocked pytest suite — no API keys, no network
 │   ├── conftest.py                 # Fixtures: stubbed LLM clients, sample recipe, DB double
 │   ├── test_api.py                 # Endpoint contracts: draft → confirm, error mapping
@@ -91,6 +94,8 @@ loudly on a stub instead of quietly billing a real request.
 │   └── test_images/                # Multi-page recipe screenshot fixtures
 │       ├── recipe_page1.jpeg
 │       └── recipe_page2.jpeg
+├── ui/
+│   └── app.py                      # Streamlit UI: Ingestion, Search, Meal Plan tabs
 ├── alembic/                        # DB migrations
 │   ├── env.py
 │   ├── script.py.mako
@@ -112,9 +117,13 @@ loudly on a stub instead of quietly billing a real request.
 - [x] Health check endpoint: `GET /health`.
 - [x] **Two-step draft → confirm ingestion flow** (see below).
 - [x] Embedding generation at confirm time — drafts the user discards cost nothing.
-- [x] Basic vector similarity search endpoint: `GET /api/v1/recipes/search`.
+- [x] Vector similarity search endpoint: `GET /api/v1/recipes/search`, returns cosine distance
+  alongside each hit (see below).
 - [x] Delete endpoint: `DELETE /api/v1/recipes/{recipe_id}` (see below).
+- [x] Web search fallback endpoint: `GET /api/v1/recipes/search-web` (see below).
 - [x] Mocked pytest suite covering services *and* API routes.
+- [x] Streamlit UI Tab 1 (Ingestion): parse-from-URL/text/images → review draft → confirm.
+- [x] Streamlit UI Tab 2 (Search & Discovery) (see below).
 
 ### The draft → confirm flow
 Parsing and persistence are deliberately separate. Parse endpoints are **read-only**: they return
@@ -140,12 +149,15 @@ on restart or across multiple workers.
 | `/api/v1/recipes/parse-url` | POST | 200 | `ParseUrlRequest` → `RecipeCreate` | no |
 | `/api/v1/recipes/parse-images` | POST | 200 | multipart `files[]` → `RecipeCreate` | no |
 | `/api/v1/recipes/confirm` | POST | 201 | `RecipeCreate` → `RecipeRead` | **yes** |
-| `/api/v1/recipes/search` | GET | 200 | `?q=&limit=` → `List[RecipeRead]` | no |
+| `/api/v1/recipes/search` | GET | 200 | `?q=&limit=` → `List[RecipeSearchResult]` | no |
+| `/api/v1/recipes/search-web` | GET | 200 | `?query=` → `List[WebSearchResult]` | no |
 | `/api/v1/recipes/{recipe_id}` | DELETE | 204 / 404 | — → no body | **yes** (delete) |
 | `/health` | GET | 200 | — | no |
 
 `RecipeRead` does not expose the `embedding` column: it is 1536 floats (~25KB of JSON) per row,
-no client consumes it, and it multiplied `/search` payloads by ~25x.
+no client consumes it, and it multiplied `/search` payloads by ~25x. `RecipeSearchResult` (used
+only by `/search`) is `RecipeRead` plus a `distance: float` field — pgvector's cosine distance
+(`<=>`) between the query embedding and that row, `0` = identical, `2` = opposite. Lower is closer.
 
 ### Delete flow
 `DELETE /api/v1/recipes/{recipe_id}` looks the row up with `AsyncSession.get`, deletes it, and
@@ -153,6 +165,40 @@ commits — implemented in `RecipeDatabaseService.delete_recipe` (`app/services/
 Returns `204 No Content` when a row was removed, `404` when no recipe with that id exists, and
 `500` on an unexpected DB failure. There is no soft-delete or cascade behavior; the row and its
 embedding are removed permanently.
+
+### Web search fallback
+`GET /api/v1/recipes/search-web?query=...` is for when the user has no URL or pasted text to feed
+`parse-url` / `parse-text` yet — e.g. "find me a recipe for X" — and needs candidate pages to pick
+from first. It searches the public web (DuckDuckGo, via the `ddgs` package) and returns the top 3
+matches as `[{"title": "...", "url": "...", "snippet": "..."}]`. Before querying, it appends
+`recipe cooking` to the user's search string (e.g. `fish dish` → `fish dish recipe cooking`) to
+steer DuckDuckGo toward actual cooking pages instead of Wikipedia/medical results. It only
+surfaces candidates; it does not parse or persist anything — the client still has to send a
+chosen URL through `parse-url` → `confirm`. `400` on an empty query, `500` if the search itself
+fails. Implemented in `search_recipes_web()` (`app/services/web_search_service.py`).
+
+### Search UI (Tab 2) — `ui/app.py`, `search_tab`
+Ties `/search`, `/search-web`, and `DELETE /{recipe_id}` together into one flow. There is no hard
+distance cutoff that hides the local result — every search renders a consistent outcome:
+
+1. User types a query and clicks **Search Local Recipes** → calls `/search` with `limit=1`.
+2. **A result came back:** always renders the top hit — regardless of how distant a match it is —
+   via `Distance: <d> | Match Quality: <label>` (`match_quality_label()`: `≤0.3` Excellent,
+   `≤0.45` Good, `≤0.6` Moderate, else Weak), the full recipe (via the same `render_draft_preview`
+   used by the ingestion tab), and a **Delete Recipe** button wired to
+   `DELETE /api/v1/recipes/{recipe_id}`.
+3. **No rows in the database at all:** shows an info message instead of a recipe card.
+4. **Always, right after either outcome:** a **"Not what you were looking for?"** section with a
+   **Search Web for this Query** button → calls `/search-web` and lists the top 3 hits, each with
+   a **Parse this Recipe** button. This no longer depends on the local match being poor — it's
+   offered unconditionally once a local search has run.
+
+Clicking **Parse this Recipe** doesn't parse in place — it stages the URL in
+`st.session_state["pending_recipe_url"]` and reruns the script. A check at the top of `ui/app.py`
+(before the Ingestion tab's URL `text_input` is instantiated) applies that staged value to the
+widget's own state key. This two-step handoff is required because Streamlit raises
+`StreamlitAPIException` if you assign to a widget's session-state key after that widget has already
+been instantiated in the same script run — and the Ingestion tab renders before the Search tab.
 
 ---
 

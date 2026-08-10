@@ -38,8 +38,17 @@ class RecipeRead(RecipeCreate):
     class Config:
         from_attributes = True
 
+class RecipeSearchResult(RecipeRead):
+    """A search hit: a persisted recipe plus its cosine distance to the query."""
+    distance: float = Field(description="Cosine distance to the query embedding (0=identical, 2=opposite).")
+
 class ParseTextRequest(BaseModel):
     text: str = Field(..., description="Raw copied recipe text to parse.")
 
 class ParseUrlRequest(BaseModel):
     url: str = Field(..., description="Web page URL containing a recipe to scrape and parse.")
+
+class WebSearchResult(BaseModel):
+    title: str
+    url: str
+    snippet: str

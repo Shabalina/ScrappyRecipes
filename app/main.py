@@ -10,10 +10,18 @@ load_dotenv()
 
 from app.database import Base, engine, get_db
 from app.models import RecipeModel
-from app.schemas import ParseTextRequest, ParseUrlRequest, RecipeCreate, RecipeRead
+from app.schemas import (
+    ParseTextRequest,
+    ParseUrlRequest,
+    RecipeCreate,
+    RecipeRead,
+    RecipeSearchResult,
+    WebSearchResult,
+)
 from app.services.embedding_service import generate_embedding
 from app.services.recipe_db_service import RecipeDatabaseService
 from app.services.router_service import LLMRouterService
+from app.services.web_search_service import search_recipes_web
 
 # --- 1. Lifespan Handler for DB Table Creation ---
 @asynccontextmanager
@@ -159,8 +167,8 @@ async def delete_recipe(recipe_id: int, db: AsyncSession = Depends(get_db)):
 # --- Vector Search Endpoint ---
 
 @app.get(
-    "/api/v1/recipes/search", 
-    response_model=List[RecipeRead], 
+    "/api/v1/recipes/search",
+    response_model=List[RecipeSearchResult],
     status_code=status.HTTP_200_OK
 )
 async def search_recipes(
@@ -178,14 +186,42 @@ async def search_recipes(
         query_vector = await generate_embedding(clean_query)
 
         # 2. Query DB using pgvector Cosine Distance (<=>)
+        distance = RecipeModel.embedding.cosine_distance(query_vector).label("distance")
         stmt = (
-            select(RecipeModel)
+            select(RecipeModel, distance)
             .where(RecipeModel.embedding.is_not(None))
-            .order_by(RecipeModel.embedding.cosine_distance(query_vector))
+            .order_by(distance)
             .limit(limit)
         )
 
         result = await db.execute(stmt)
-        return result.scalars().all()
+        return [
+            RecipeSearchResult(**RecipeRead.model_validate(recipe).model_dump(), distance=recipe_distance)
+            for recipe, recipe_distance in result.all()
+        ]
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Search failed: {str(e)}")
+
+
+# --- Web Search Fallback Endpoint ---
+#
+# For when the user has neither a URL nor pasted text — e.g. "find me a
+# recipe for X" — and needs candidate pages to pick from before parse-url.
+
+@app.get(
+    "/api/v1/recipes/search-web",
+    response_model=List[WebSearchResult],
+    status_code=status.HTTP_200_OK
+)
+async def search_recipes_web_endpoint(
+    query: str = Query(..., description="Recipe search query, e.g. 'vegan lasagna'"),
+):
+    """Searches the public web for recipe pages matching `query` (top 3 results)."""
+    clean_query = query.strip()
+    if not clean_query:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Search query cannot be empty.")
+
+    try:
+        return search_recipes_web(clean_query, max_results=3)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Web search failed: {str(e)}")
