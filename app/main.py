@@ -131,6 +131,31 @@ async def confirm_recipe(payload: RecipeCreate, db: AsyncSession = Depends(get_d
         )
 
 
+# --- Delete Endpoint ---
+
+@app.delete(
+    "/api/v1/recipes/{recipe_id}",
+    status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_recipe(recipe_id: int, db: AsyncSession = Depends(get_db)):
+    """Removes a recipe from PostgreSQL by id."""
+    try:
+        db_service = RecipeDatabaseService(db)
+        deleted = await db_service.delete_recipe(recipe_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not delete recipe: {str(e)}"
+        )
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Recipe {recipe_id} not found"
+        )
+    return None
+
+
 # --- Vector Search Endpoint ---
 
 @app.get(

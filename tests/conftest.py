@@ -112,9 +112,11 @@ def parser(monkeypatch, mock_openai_parse, mock_gemini_generate):
 
 @pytest.fixture
 def mock_db_session():
-    """An AsyncSession double: `add` is sync, `commit`/`refresh` are awaited."""
+    """An AsyncSession double: `add` is sync, the rest are awaited coroutines."""
     session = MagicMock()
     session.add = MagicMock()
     session.commit = AsyncMock()
     session.refresh = AsyncMock()
+    session.get = AsyncMock(return_value=None)
+    session.delete = AsyncMock()
     return session

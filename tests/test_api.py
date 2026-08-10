@@ -24,6 +24,10 @@ PARSE_IMAGES = "/api/v1/recipes/parse-images"
 CONFIRM = "/api/v1/recipes/confirm"
 
 
+def recipe_route(recipe_id):
+    return f"/api/v1/recipes/{recipe_id}"
+
+
 def saved_row_from(recipe, row_id=42):
     """A stand-in for the RecipeModel that save_parsed_recipe returns.
 
@@ -54,8 +58,11 @@ def api(monkeypatch, sample_recipe, mock_db_session):
     monkeypatch.setattr(main.router_service, "route_and_parse", route_and_parse)
 
     save = AsyncMock(side_effect=lambda recipe: saved_row_from(recipe))
+    delete = AsyncMock(return_value=True)
     monkeypatch.setattr(
-        main, "RecipeDatabaseService", MagicMock(return_value=MagicMock(save_parsed_recipe=save))
+        main,
+        "RecipeDatabaseService",
+        MagicMock(return_value=MagicMock(save_parsed_recipe=save, delete_recipe=delete)),
     )
 
     async def override_get_db():
@@ -67,6 +74,7 @@ def api(monkeypatch, sample_recipe, mock_db_session):
             client=TestClient(main.app),
             route_and_parse=route_and_parse,
             save=save,
+            delete=delete,
             db=mock_db_session,
         )
     finally:
@@ -234,6 +242,37 @@ class TestDraftRoundTrip:
         assert r.status_code == 201, r.text
         assert r.json()["id"] == 42
         assert r.json()["title"] == draft["title"]
+
+
+class TestDeleteRecipe:
+    def test_delete_returns_204_with_no_body(self, api):
+        r = api.client.delete(recipe_route(42))
+
+        assert r.status_code == 204
+        assert r.content == b""
+        api.delete.assert_awaited_once_with(42)
+
+    def test_delete_missing_recipe_is_404(self, api):
+        api.delete.return_value = False
+
+        r = api.client.delete(recipe_route(999))
+
+        assert r.status_code == 404
+        assert "999" in r.json()["detail"]
+
+    def test_delete_database_failure_is_500(self, api):
+        api.delete.side_effect = RuntimeError("connection refused")
+
+        r = api.client.delete(recipe_route(42))
+
+        assert r.status_code == 500
+        assert "Could not delete recipe" in r.json()["detail"]
+
+    def test_non_integer_id_is_422(self, api):
+        r = api.client.delete("/api/v1/recipes/not-an-int")
+
+        assert r.status_code == 422
+        api.delete.assert_not_awaited()
 
 
 class TestUnchangedEndpoints:

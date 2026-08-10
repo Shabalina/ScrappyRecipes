@@ -37,4 +37,17 @@ class RecipeDatabaseService:
         await self.db.commit()
         await self.db.refresh(db_recipe)
 
-        return db_recipe 
+        return db_recipe
+
+    async def delete_recipe(self, recipe_id: int) -> bool:
+        """
+        Deletes a recipe by id. Returns True if a row was deleted,
+        False if no recipe with that id exists.
+        """
+        recipe = await self.db.get(RecipeModel, recipe_id)
+        if recipe is None:
+            return False
+
+        await self.db.delete(recipe)
+        await self.db.commit()
+        return True 

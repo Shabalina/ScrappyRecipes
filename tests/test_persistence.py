@@ -113,3 +113,31 @@ class TestSaveParsedRecipe:
             "quantity": 2.0,
             "unit": "cups",
         }
+
+
+class TestDeleteRecipe:
+    @pytest.fixture
+    def db_service(self, mock_db_session):
+        import app.services.recipe_db_service as recipe_db_service
+
+        return recipe_db_service.RecipeDatabaseService(mock_db_session)
+
+    async def test_deletes_an_existing_row(self, db_service, mock_db_session):
+        existing_row = MagicMock()
+        mock_db_session.get.return_value = existing_row
+
+        deleted = await db_service.delete_recipe(42)
+
+        assert deleted is True
+        mock_db_session.get.assert_awaited_once()
+        mock_db_session.delete.assert_awaited_once_with(existing_row)
+        mock_db_session.commit.assert_awaited_once()
+
+    async def test_returns_false_when_recipe_is_missing(self, db_service, mock_db_session):
+        mock_db_session.get.return_value = None
+
+        deleted = await db_service.delete_recipe(999)
+
+        assert deleted is False
+        mock_db_session.delete.assert_not_awaited()
+        mock_db_session.commit.assert_not_awaited()

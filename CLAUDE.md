@@ -31,7 +31,7 @@ Scrappy Recipes is an AI-powered recipe extraction and semantic search service b
 
 ### Testing
 `tests/` is a **pytest suite with every LLM and HTTP call mocked** — it needs no API keys, makes
-no network requests, and costs nothing. 40 tests, ~1.3s.
+no network requests, and costs nothing. 70 tests, ~3s.
 
 * **Run everything:** `venv/bin/python -m pytest`
 * **One file:** `venv/bin/python -m pytest tests/test_router.py`
@@ -51,7 +51,7 @@ parsing/cleaning logic stays under test:
 | `gemini_client.models.generate_content` | `mock_gemini_generate` (returns JSON *string*) |
 | `httpx.AsyncClient` | `httpx.MockTransport` in `tests/test_scraper.py` |
 | `AsyncOpenAI` (embeddings) | patched in `tests/test_persistence.py` |
-| `AsyncSession` | `mock_db_session` (`add` sync; `commit`/`refresh` async) |
+| `AsyncSession` | `mock_db_session` (`add` sync; `commit`/`refresh`/`get`/`delete` async) |
 
 An autouse `_no_live_api` fixture overwrites both API keys with dummies, so a missing mock fails
 loudly on a stub instead of quietly billing a real request.
@@ -73,7 +73,7 @@ loudly on a stub instead of quietly billing a real request.
 │   └── services/
 │       ├── embedding_service.py    # generate_embedding() — OpenAI text-embedding-3-small
 │       ├── llm_parser.py           # RecipeParserService: text (OpenAI) + image (Gemini) parsing
-│       ├── recipe_db_service.py    # Recipe persistence helpers
+│       ├── recipe_db_service.py    # Recipe persistence helpers (save + delete)
 │       ├── router_service.py       # LLMRouterService for text, url, image routing
 │       └── scraper_service.py      # URL fetching & HTML extraction
 ├── tests/                          # Mocked pytest suite — no API keys, no network
@@ -113,6 +113,7 @@ loudly on a stub instead of quietly billing a real request.
 - [x] **Two-step draft → confirm ingestion flow** (see below).
 - [x] Embedding generation at confirm time — drafts the user discards cost nothing.
 - [x] Basic vector similarity search endpoint: `GET /api/v1/recipes/search`.
+- [x] Delete endpoint: `DELETE /api/v1/recipes/{recipe_id}` (see below).
 - [x] Mocked pytest suite covering services *and* API routes.
 
 ### The draft → confirm flow
@@ -140,10 +141,18 @@ on restart or across multiple workers.
 | `/api/v1/recipes/parse-images` | POST | 200 | multipart `files[]` → `RecipeCreate` | no |
 | `/api/v1/recipes/confirm` | POST | 201 | `RecipeCreate` → `RecipeRead` | **yes** |
 | `/api/v1/recipes/search` | GET | 200 | `?q=&limit=` → `List[RecipeRead]` | no |
+| `/api/v1/recipes/{recipe_id}` | DELETE | 204 / 404 | — → no body | **yes** (delete) |
 | `/health` | GET | 200 | — | no |
 
 `RecipeRead` does not expose the `embedding` column: it is 1536 floats (~25KB of JSON) per row,
 no client consumes it, and it multiplied `/search` payloads by ~25x.
+
+### Delete flow
+`DELETE /api/v1/recipes/{recipe_id}` looks the row up with `AsyncSession.get`, deletes it, and
+commits — implemented in `RecipeDatabaseService.delete_recipe` (`app/services/recipe_db_service.py`).
+Returns `204 No Content` when a row was removed, `404` when no recipe with that id exists, and
+`500` on an unexpected DB failure. There is no soft-delete or cascade behavior; the row and its
+embedding are removed permanently.
 
 ---
 
