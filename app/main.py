@@ -14,6 +14,7 @@ from app.schemas import (
     ParseTextRequest,
     ParseUrlRequest,
     RecipeCreate,
+    RecipeListResponse,
     RecipeRead,
     RecipeSearchResult,
     WebSearchResult,
@@ -137,6 +138,32 @@ async def confirm_recipe(payload: RecipeCreate, db: AsyncSession = Depends(get_d
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not save recipe: {str(e)}"
         )
+
+
+# --- List Endpoint ---
+
+@app.get(
+    "/api/v1/recipes",
+    response_model=RecipeListResponse,
+    status_code=status.HTTP_200_OK
+)
+async def list_recipes(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db)
+):
+    """Browse the saved recipe library, newest first."""
+    try:
+        db_service = RecipeDatabaseService(db)
+        recipes, total = await db_service.list_recipes(skip=skip, limit=limit)
+        return RecipeListResponse(
+            items=[RecipeRead.model_validate(r) for r in recipes],
+            total=total,
+            page=(skip // limit) + 1,
+            limit=limit,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not list recipes: {str(e)}")
 
 
 # --- Delete Endpoint ---

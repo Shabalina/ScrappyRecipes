@@ -42,6 +42,13 @@ class RecipeSearchResult(RecipeRead):
     """A search hit: a persisted recipe plus its cosine distance to the query."""
     distance: float = Field(description="Cosine distance to the query embedding (0=identical, 2=opposite).")
 
+class RecipeListResponse(BaseModel):
+    """A page of the recipe library, sorted by creation date descending."""
+    items: List[RecipeRead]
+    total: int
+    page: int
+    limit: int
+
 class ParseTextRequest(BaseModel):
     text: str = Field(..., description="Raw copied recipe text to parse.")
 

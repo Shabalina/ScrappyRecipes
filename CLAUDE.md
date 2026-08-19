@@ -70,7 +70,7 @@ loudly on a stub instead of quietly billing a real request.
 ├── app/
 │   ├── database.py                 # Async DB engine & session dependency
 │   ├── main.py                     # FastAPI entry point, lifespan, routes
-│   ├── models.py                   # SQLAlchemy RecipeModel (includes Vector column)
+│   ├── models.py                   # SQLAlchemy RecipeModel (includes Vector column), MenuModel
 │   ├── schemas.py                  # Pydantic schemas (RecipeRead, ParseTextRequest, etc.)
 │   └── services/
 │       ├── embedding_service.py    # generate_embedding() — OpenAI text-embedding-3-small
@@ -121,9 +121,13 @@ loudly on a stub instead of quietly billing a real request.
   alongside each hit (see below).
 - [x] Delete endpoint: `DELETE /api/v1/recipes/{recipe_id}` (see below).
 - [x] Web search fallback endpoint: `GET /api/v1/recipes/search-web` (see below).
+- [x] Paginated library listing endpoint: `GET /api/v1/recipes` (see below).
 - [x] Mocked pytest suite covering services *and* API routes.
 - [x] Streamlit UI Tab 1 (Ingestion): parse-from-URL/text/images → review draft → confirm.
-- [x] Streamlit UI Tab 2 (Search & Discovery) (see below).
+- [x] Streamlit UI Tab 2 (Search & Discovery), including a "Browse All Recipes" library view
+  (see below).
+- [x] `MenuModel` and `RecipeModel.last_menu_number` (migration `d5f0ee3eb3ce`) — data model only,
+  no API/UI yet (see below).
 
 ### The draft → confirm flow
 Parsing and persistence are deliberately separate. Parse endpoints are **read-only**: they return
@@ -151,6 +155,7 @@ on restart or across multiple workers.
 | `/api/v1/recipes/confirm` | POST | 201 | `RecipeCreate` → `RecipeRead` | **yes** |
 | `/api/v1/recipes/search` | GET | 200 | `?q=&limit=` → `List[RecipeSearchResult]` | no |
 | `/api/v1/recipes/search-web` | GET | 200 | `?query=` → `List[WebSearchResult]` | no |
+| `/api/v1/recipes` | GET | 200 | `?skip=&limit=` → `RecipeListResponse` | no |
 | `/api/v1/recipes/{recipe_id}` | DELETE | 204 / 404 | — → no body | **yes** (delete) |
 | `/health` | GET | 200 | — | no |
 
@@ -177,6 +182,19 @@ surfaces candidates; it does not parse or persist anything — the client still 
 chosen URL through `parse-url` → `confirm`. `400` on an empty query, `500` if the search itself
 fails. Implemented in `search_recipes_web()` (`app/services/web_search_service.py`).
 
+### Library listing endpoint
+`GET /api/v1/recipes?skip=&limit=` browses the full saved library, newest first, for when the user
+isn't searching for anything specific yet. `skip` defaults to `0`, `limit` defaults to `20` (max
+`100`). Implemented in `RecipeDatabaseService.list_recipes` (`app/services/recipe_db_service.py`),
+which runs a `SELECT count(*)` alongside the paginated `ORDER BY created_at DESC` query so the
+response can report the total row count without a second round trip from the client. Returns a
+`RecipeListResponse`: `{"items": [RecipeRead], "total": int, "page": int, "limit": int}`, where
+`page` is derived as `(skip // limit) + 1`. `500` on an unexpected DB failure; no `404` case since
+an out-of-range `skip` just yields an empty `items` list. Sorting relies on the `created_at`
+column added to `RecipeModel` (migration `fe8e517ee849`) — every prior row was backfilled to the
+migration's `now()` at the time it ran, so their relative order among each other is undefined,
+but any row inserted after `confirm` sorts correctly.
+
 ### Search UI (Tab 2) — `ui/app.py`, `search_tab`
 Ties `/search`, `/search-web`, and `DELETE /{recipe_id}` together into one flow. There is no hard
 distance cutoff that hides the local result — every search renders a consistent outcome:
@@ -199,6 +217,25 @@ Clicking **Parse this Recipe** doesn't parse in place — it stages the URL in
 widget's own state key. This two-step handoff is required because Streamlit raises
 `StreamlitAPIException` if you assign to a widget's session-state key after that widget has already
 been instantiated in the same script run — and the Ingestion tab renders before the Search tab.
+
+Beneath all of the above, a permanent **"Browse All Recipes"** section calls `GET /api/v1/recipes`
+independently of whether a search has run — it is not gated behind the search flow. Pagination is
+tracked in `st.session_state["browse_page"]` (0-indexed) and sent to the API as `skip = page *
+20`, `limit = 20`. Each recipe renders as a bordered card: title, cook time, an
+**"Ingredients & Instructions"** expander (reusing `render_draft_preview`), and its own **Delete
+Recipe** button wired to `DELETE /api/v1/recipes/{recipe_id}` — deleting rerenders in place rather
+than touching `local_search_result`. **Previous Page** / **Next Page** buttons increment or
+decrement `browse_page` and are disabled at the first/last page respectively (last page computed
+client-side from the response's `total`).
+
+### Meal menu data model (no API/UI yet)
+`RecipeModel` gained a nullable `last_menu_number: int` column, and a new `MenuModel` table
+(`menus`) tracks generated meal menus: `id`, a unique/indexed sequential `menu_number` (1, 2, 3...),
+`created_at`, and `recipe_ids` (`JSON`, a plain list of recipe ids — matches the existing
+`ingredients`/`instructions`/`tags` convention on `RecipeModel` rather than a Postgres `ARRAY`).
+Added in migration `d5f0ee3eb3ce` (`alembic/versions/d5f0ee3eb3ce_*.py`), applied to the dev DB.
+Nothing populates `last_menu_number` or writes to `menus` yet — no service, endpoint, or schema
+exists for menu generation; this is purely the schema groundwork for that feature.
 
 ---
 

@@ -59,10 +59,11 @@ def api(monkeypatch, sample_recipe, mock_db_session):
 
     save = AsyncMock(side_effect=lambda recipe: saved_row_from(recipe))
     delete = AsyncMock(return_value=True)
+    list_recipes = AsyncMock(return_value=([], 0))
     monkeypatch.setattr(
         main,
         "RecipeDatabaseService",
-        MagicMock(return_value=MagicMock(save_parsed_recipe=save, delete_recipe=delete)),
+        MagicMock(return_value=MagicMock(save_parsed_recipe=save, delete_recipe=delete, list_recipes=list_recipes)),
     )
 
     async def override_get_db():
@@ -75,6 +76,7 @@ def api(monkeypatch, sample_recipe, mock_db_session):
             route_and_parse=route_and_parse,
             save=save,
             delete=delete,
+            list_recipes=list_recipes,
             db=mock_db_session,
         )
     finally:
@@ -273,6 +275,65 @@ class TestDeleteRecipe:
 
         assert r.status_code == 422
         api.delete.assert_not_awaited()
+
+
+class TestListRecipes:
+    ROUTE = "/api/v1/recipes"
+
+    def test_returns_items_with_pagination_metadata(self, api, sample_recipe):
+        rows = [saved_row_from(sample_recipe, row_id=i) for i in (3, 2, 1)]
+        api.list_recipes.return_value = (rows, 3)
+
+        r = api.client.get(self.ROUTE, params={"skip": 0, "limit": 20})
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert [item["id"] for item in body["items"]] == [3, 2, 1]
+        assert body["total"] == 3
+        assert body["page"] == 1
+        assert body["limit"] == 20
+
+    def test_response_omits_the_embedding(self, api, sample_recipe):
+        api.list_recipes.return_value = ([saved_row_from(sample_recipe, row_id=1)], 1)
+
+        r = api.client.get(self.ROUTE)
+
+        assert "embedding" not in r.json()["items"][0]
+
+    def test_empty_library_returns_empty_items(self, api):
+        api.list_recipes.return_value = ([], 0)
+
+        r = api.client.get(self.ROUTE)
+
+        assert r.status_code == 200
+        assert r.json() == {"items": [], "total": 0, "page": 1, "limit": 20}
+
+    def test_page_number_reflects_skip_and_limit(self, api, sample_recipe):
+        api.list_recipes.return_value = ([saved_row_from(sample_recipe, row_id=1)], 45)
+
+        r = api.client.get(self.ROUTE, params={"skip": 40, "limit": 20})
+
+        assert r.status_code == 200, r.text
+        assert r.json()["page"] == 3
+        api.list_recipes.assert_awaited_once_with(skip=40, limit=20)
+
+    def test_negative_skip_is_422(self, api):
+        r = api.client.get(self.ROUTE, params={"skip": -1})
+
+        assert r.status_code == 422
+
+    def test_limit_above_max_is_422(self, api):
+        r = api.client.get(self.ROUTE, params={"limit": 101})
+
+        assert r.status_code == 422
+
+    def test_database_failure_is_500(self, api):
+        api.list_recipes.side_effect = RuntimeError("connection refused")
+
+        r = api.client.get(self.ROUTE)
+
+        assert r.status_code == 500
+        assert "Could not list recipes" in r.json()["detail"]
 
 
 class TestLocalSearch:

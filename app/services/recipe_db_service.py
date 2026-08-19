@@ -1,4 +1,7 @@
 # app/services/recipe_db_service.py
+from typing import List, Tuple
+
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas import RecipeCreate
 from app.models import RecipeModel
@@ -50,4 +53,22 @@ class RecipeDatabaseService:
 
         await self.db.delete(recipe)
         await self.db.commit()
-        return True 
+        return True
+
+    async def list_recipes(self, skip: int, limit: int) -> Tuple[List[RecipeModel], int]:
+        """
+        Returns a page of recipes ordered by creation date descending,
+        alongside the total row count for pagination.
+        """
+        total = await self.db.scalar(select(func.count()).select_from(RecipeModel))
+
+        stmt = (
+            select(RecipeModel)
+            .order_by(RecipeModel.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await self.db.execute(stmt)
+        recipes = result.scalars().all()
+
+        return recipes, total 

@@ -277,5 +277,71 @@ with search_tab:
                 st.rerun()
             st.divider()
 
+    st.divider()
+    st.subheader("Browse All Recipes")
+
+    BROWSE_PAGE_SIZE = 20
+    st.session_state.setdefault("browse_page", 0)
+
+    def fetch_browse_page():
+        skip = st.session_state["browse_page"] * BROWSE_PAGE_SIZE
+        response = requests.get(
+            f"{API_BASE_URL}/api/v1/recipes",
+            params={"skip": skip, "limit": BROWSE_PAGE_SIZE},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    try:
+        library = fetch_browse_page()
+    except requests.exceptions.RequestException as e:
+        library = None
+        st.error(f"Could not load recipe library: {e}")
+
+    if library is not None:
+        total = library["total"]
+        items = library["items"]
+
+        if total == 0:
+            st.info("No recipes saved yet.")
+        else:
+            last_page = (total - 1) // BROWSE_PAGE_SIZE
+            st.caption(f"{total} recipe{'s' if total != 1 else ''} — page {library['page']} of {last_page + 1}")
+
+            for recipe in items:
+                cook_time = recipe.get("cook_time_minutes")
+                cook_time_label = f"{cook_time} min" if cook_time else "—"
+                with st.container(border=True):
+                    st.markdown(f"**{recipe.get('title', 'Untitled Recipe')}**")
+                    st.caption(f"Cook time: {cook_time_label}")
+
+                    with st.expander("Ingredients & Instructions"):
+                        render_draft_preview(recipe)
+
+                    if st.button("Delete Recipe", key=f"browse_delete_{recipe['id']}"):
+                        with st.spinner("Deleting recipe..."):
+                            try:
+                                del_response = requests.delete(
+                                    f"{API_BASE_URL}/api/v1/recipes/{recipe['id']}",
+                                    timeout=30,
+                                )
+                                del_response.raise_for_status()
+                                st.success(f"Deleted recipe #{recipe['id']}.")
+                                st.rerun()
+                            except requests.exceptions.HTTPError:
+                                detail = del_response.json().get("detail", del_response.text)
+                                st.error(f"Failed to delete recipe: {detail}")
+                            except requests.exceptions.RequestException as e:
+                                st.error(f"Request failed: {e}")
+
+            nav_cols = st.columns(2)
+            if nav_cols[0].button("Previous Page", disabled=st.session_state["browse_page"] <= 0):
+                st.session_state["browse_page"] -= 1
+                st.rerun()
+            if nav_cols[1].button("Next Page", disabled=st.session_state["browse_page"] >= last_page):
+                st.session_state["browse_page"] += 1
+                st.rerun()
+
 with meal_plan_tab:
     st.info("Coming soon.")
