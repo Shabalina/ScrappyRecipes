@@ -119,4 +119,6 @@ def mock_db_session():
     session.refresh = AsyncMock()
     session.get = AsyncMock(return_value=None)
     session.delete = AsyncMock()
+    session.execute = AsyncMock()
+    session.scalar = AsyncMock()
     return session

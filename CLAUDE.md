@@ -33,7 +33,7 @@ Scrappy Recipes is an AI-powered recipe extraction and semantic search service b
 
 ### Testing
 `tests/` is a **pytest suite with every LLM and HTTP call mocked** — it needs no API keys, makes
-no network requests, and costs nothing. 81 tests, ~3s.
+no network requests, and costs nothing. 96 tests, ~3s.
 
 * **Run everything:** `venv/bin/python -m pytest`
 * **One file:** `venv/bin/python -m pytest tests/test_router.py`
@@ -53,7 +53,7 @@ parsing/cleaning logic stays under test:
 | `gemini_client.models.generate_content` | `mock_gemini_generate` (returns JSON *string*) |
 | `httpx.AsyncClient` | `httpx.MockTransport` in `tests/test_scraper.py` |
 | `AsyncOpenAI` (embeddings) | patched in `tests/test_persistence.py` |
-| `AsyncSession` | `mock_db_session` (`add` sync; `commit`/`refresh`/`get`/`delete` async) |
+| `AsyncSession` | `mock_db_session` (`add` sync; `commit`/`refresh`/`get`/`delete`/`execute`/`scalar` async) |
 
 An autouse `_no_live_api` fixture overwrites both API keys with dummies, so a missing mock fails
 loudly on a stub instead of quietly billing a real request.
@@ -75,6 +75,7 @@ loudly on a stub instead of quietly billing a real request.
 │   └── services/
 │       ├── embedding_service.py    # generate_embedding() — OpenAI text-embedding-3-small
 │       ├── llm_parser.py           # RecipeParserService: text (OpenAI) + image (Gemini) parsing
+│       ├── menu_service.py         # get_slot_candidates() — scored recipe candidates for a menu slot
 │       ├── recipe_db_service.py    # Recipe persistence helpers (save + delete)
 │       ├── router_service.py       # LLMRouterService for text, url, image routing
 │       ├── scraper_service.py      # URL fetching & HTML extraction
@@ -86,6 +87,7 @@ loudly on a stub instead of quietly billing a real request.
 │   ├── test_router.py              # Route selection, precedence, parse-only guarantee
 │   ├── test_scraper.py             # HTML cleaning + network failures via MockTransport
 │   ├── test_persistence.py         # Embedding text/vector + DB save
+│   ├── test_menu_service.py        # Slot candidate scoring: exclusion, variety penalty, expiry
 │   ├── live/                       # Opt-in real-API checks (not collected by pytest)
 │   │   ├── README.md
 │   │   ├── check_parsers.py
@@ -128,6 +130,8 @@ loudly on a stub instead of quietly billing a real request.
   (see below).
 - [x] `MenuModel` and `RecipeModel.last_menu_number` (migration `d5f0ee3eb3ce`) — data model only,
   no API/UI yet (see below).
+- [x] `get_slot_candidates()` menu slot candidate scoring service — service layer only, no
+  API/UI yet (see below).
 
 ### The draft → confirm flow
 Parsing and persistence are deliberately separate. Parse endpoints are **read-only**: they return
@@ -234,8 +238,37 @@ client-side from the response's `total`).
 `created_at`, and `recipe_ids` (`JSON`, a plain list of recipe ids — matches the existing
 `ingredients`/`instructions`/`tags` convention on `RecipeModel` rather than a Postgres `ARRAY`).
 Added in migration `d5f0ee3eb3ce` (`alembic/versions/d5f0ee3eb3ce_*.py`), applied to the dev DB.
-Nothing populates `last_menu_number` or writes to `menus` yet — no service, endpoint, or schema
-exists for menu generation; this is purely the schema groundwork for that feature.
+Nothing populates `last_menu_number` or writes to `menus` yet — no endpoint or schema exists for
+menu generation; only the candidate-scoring service below consumes this data so far.
+
+### Menu slot candidate scoring — `get_slot_candidates()` (service layer only, no API/UI yet)
+`app/services/menu_service.py` picks recipe candidates for a single slot in a generated menu. It
+combines pgvector semantic similarity with a "variety" penalty so a rotation doesn't keep
+resurfacing the same dishes:
+
+1. **Vector search.** Embeds the slot `query` and orders recipes by pgvector cosine distance,
+   dropping any id in `exclude_ids` (recipes already placed in another slot of this menu) from the
+   `WHERE` clause entirely — they're never scored, just absent. The initial pool pulled from the DB
+   is `limit * 5` (`CANDIDATE_POOL_MULTIPLIER`), wider than the final `limit`, so recipes demoted by
+   the freshness penalty still have lower-ranked-by-distance alternatives to lose to.
+2. **Freshness window.** `W = max(1, N // 12)` where `N` is the total recipe count (`floor(N/6/2)`
+   collapses to `N // 12` for integer `N`) — bigger libraries get a longer cooldown before a recipe
+   is eligible to resurface. `M` is the current max `menu_number` from `menus` (`0` if none exist
+   yet).
+3. **Penalty.** For a candidate with `last_menu_number` set, `E = M - last_menu_number`. If
+   `1 <= E <= W`, penalty `= 0.25 * (W - E + 1) / W` (`VARIETY_PENALTY_ALPHA = 0.25`) — linear
+   decay from `0.25` (cooked in the immediately preceding menu) down toward `0` at the window edge.
+   Recipes never used, or used further back than `W` menus ago, get `0.0` penalty — no partial
+   credit outside the window.
+4. **Final score** `= cosine distance + penalty`, ascending (lower wins). Candidates are re-sorted
+   by this score and truncated to `limit`.
+
+Returns a list of `SlotCandidate` dataclasses (`recipe: RecipeModel`, `distance: float`,
+`penalty: float`, `final_score: float`) — not a Pydantic schema, since nothing outside the service
+layer consumes this yet. Covered by `tests/test_menu_service.py` (exclusion via inspecting the
+compiled `NOT IN` clause params, penalty demotion changing rank order, and expired/never-used
+penalties being exactly `0.0`). No endpoint or menu-generation orchestration (looping over slots,
+writing a new `MenuModel` row, bumping `last_menu_number`) exists yet.
 
 ---
 
