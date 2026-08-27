@@ -80,6 +80,8 @@ loudly on a stub instead of quietly billing a real request.
 │       ├── router_service.py       # LLMRouterService for text, url, image routing
 │       ├── scraper_service.py      # URL fetching & HTML extraction
 │       └── web_search_service.py   # search_recipes_web() — DuckDuckGo (ddgs) top-3 lookup
+│   └── routers/
+│       └── menu.py                 # Menu endpoints: slot-candidates (read-only), confirm (write)
 ├── tests/                          # Mocked pytest suite — no API keys, no network
 │   ├── conftest.py                 # Fixtures: stubbed LLM clients, sample recipe, DB double
 │   ├── test_api.py                 # Endpoint contracts: draft → confirm, error mapping
@@ -88,6 +90,7 @@ loudly on a stub instead of quietly billing a real request.
 │   ├── test_scraper.py             # HTML cleaning + network failures via MockTransport
 │   ├── test_persistence.py         # Embedding text/vector + DB save
 │   ├── test_menu_service.py        # Slot candidate scoring: exclusion, variety penalty, expiry
+│   ├── test_menu_router.py         # Menu endpoint contracts: slot-candidates, confirm
 │   ├── live/                       # Opt-in real-API checks (not collected by pytest)
 │   │   ├── README.md
 │   │   ├── check_parsers.py
@@ -128,10 +131,13 @@ loudly on a stub instead of quietly billing a real request.
 - [x] Streamlit UI Tab 1 (Ingestion): parse-from-URL/text/images → review draft → confirm.
 - [x] Streamlit UI Tab 2 (Search & Discovery), including a "Browse All Recipes" library view
   (see below).
-- [x] `MenuModel` and `RecipeModel.last_menu_number` (migration `d5f0ee3eb3ce`) — data model only,
-  no API/UI yet (see below).
-- [x] `get_slot_candidates()` menu slot candidate scoring service — service layer only, no
-  API/UI yet (see below).
+- [x] `MenuModel` and `RecipeModel.last_menu_number` (migration `d5f0ee3eb3ce`) — data model
+  (see below).
+- [x] `get_slot_candidates()` menu slot candidate scoring service (see below).
+- [x] Menu API endpoints: `GET /api/v1/menu/slot-candidates`, `POST /api/v1/menu/confirm`
+  (`app/routers/menu.py`) (see below).
+- [x] Streamlit UI Tab 3 (Meal Plan): builds a 1–6 meal weekly menu slot-by-slot and confirms it
+  (see below).
 
 ### The draft → confirm flow
 Parsing and persistence are deliberately separate. Parse endpoints are **read-only**: they return
@@ -161,6 +167,8 @@ on restart or across multiple workers.
 | `/api/v1/recipes/search-web` | GET | 200 | `?query=` → `List[WebSearchResult]` | no |
 | `/api/v1/recipes` | GET | 200 | `?skip=&limit=` → `RecipeListResponse` | no |
 | `/api/v1/recipes/{recipe_id}` | DELETE | 204 / 404 | — → no body | **yes** (delete) |
+| `/api/v1/menu/slot-candidates` | GET | 200 | `?q=&exclude_ids=&limit=` → `List[SlotCandidateRead]` | no |
+| `/api/v1/menu/confirm` | POST | 201 | `MenuConfirmRequest` → `MenuRead` | **yes** |
 | `/health` | GET | 200 | — | no |
 
 `RecipeRead` does not expose the `embedding` column: it is 1536 floats (~25KB of JSON) per row,
@@ -232,16 +240,16 @@ than touching `local_search_result`. **Previous Page** / **Next Page** buttons i
 decrement `browse_page` and are disabled at the first/last page respectively (last page computed
 client-side from the response's `total`).
 
-### Meal menu data model (no API/UI yet)
+### Meal menu data model
 `RecipeModel` gained a nullable `last_menu_number: int` column, and a new `MenuModel` table
 (`menus`) tracks generated meal menus: `id`, a unique/indexed sequential `menu_number` (1, 2, 3...),
 `created_at`, and `recipe_ids` (`JSON`, a plain list of recipe ids — matches the existing
 `ingredients`/`instructions`/`tags` convention on `RecipeModel` rather than a Postgres `ARRAY`).
 Added in migration `d5f0ee3eb3ce` (`alembic/versions/d5f0ee3eb3ce_*.py`), applied to the dev DB.
-Nothing populates `last_menu_number` or writes to `menus` yet — no endpoint or schema exists for
-menu generation; only the candidate-scoring service below consumes this data so far.
+`last_menu_number` and `menus` are now populated by `POST /api/v1/menu/confirm` (see below), driven
+by the Meal Plan UI tab (see below).
 
-### Menu slot candidate scoring — `get_slot_candidates()` (service layer only, no API/UI yet)
+### Menu slot candidate scoring — `get_slot_candidates()`
 `app/services/menu_service.py` picks recipe candidates for a single slot in a generated menu. It
 combines pgvector semantic similarity with a "variety" penalty so a rotation doesn't keep
 resurfacing the same dishes:
@@ -264,11 +272,60 @@ resurfacing the same dishes:
    by this score and truncated to `limit`.
 
 Returns a list of `SlotCandidate` dataclasses (`recipe: RecipeModel`, `distance: float`,
-`penalty: float`, `final_score: float`) — not a Pydantic schema, since nothing outside the service
-layer consumes this yet. Covered by `tests/test_menu_service.py` (exclusion via inspecting the
-compiled `NOT IN` clause params, penalty demotion changing rank order, and expired/never-used
-penalties being exactly `0.0`). No endpoint or menu-generation orchestration (looping over slots,
-writing a new `MenuModel` row, bumping `last_menu_number`) exists yet.
+`penalty: float`, `final_score: float`). `GET /api/v1/menu/slot-candidates` (below) wraps each one
+in `SlotCandidateRead` (`recipe: RecipeRead`) for the API boundary. Covered by
+`tests/test_menu_service.py` (exclusion via inspecting the compiled `NOT IN` clause params, penalty
+demotion changing rank order, and expired/never-used penalties being exactly `0.0`). The
+per-slot-to-full-menu orchestration (looping this call once per slot, excluding ids already
+placed) lives client-side in the Meal Plan UI tab (see below), not in this service.
+
+### Menu API endpoints — `app/routers/menu.py`
+Mirrors the recipe draft → confirm split: `slot-candidates` is read-only, `confirm` is the only
+write path for menus.
+
+* **`GET /api/v1/menu/slot-candidates?q=&exclude_ids=&limit=`** — thin wrapper around
+  `get_slot_candidates()`. `q` is required and 400s if blank after stripping. `exclude_ids` is an
+  optional comma-separated string (e.g. `1,2,3`), parsed to `List[int]`; a malformed value (e.g.
+  `1,abc,3`) is a `400`, not a `422`, since it's a hand-parsed query param rather than a
+  Pydantic-validated one. `limit` defaults to `3`, bounded `1–6` to match a menu's max slot count.
+  Returns `List[SlotCandidateRead]`; `500` on an unexpected failure (e.g. the embedding call).
+* **`POST /api/v1/menu/confirm`** — body is `MenuConfirmRequest` (`recipe_ids: List[int]`,
+  length `1–6`). Looks up `max(menu_number)` from `menus` (`0` if the table is empty), sets
+  `new_menu_number = max + 1`, inserts a `MenuModel` row with that number and the given
+  `recipe_ids`, and bulk-`UPDATE`s `last_menu_number = new_menu_number` on every `RecipeModel` row
+  whose id is in the list — so the next `slot-candidates` call for a future menu applies the
+  variety penalty against this one. No existence check on `recipe_ids`: ids that don't match any
+  row are silently no-ops in the `UPDATE`. Returns `201` with `MenuRead`; `500` on an unexpected DB
+  failure.
+
+Covered by `tests/test_menu_router.py` — both endpoints through `TestClient` with `get_db`
+overridden and `get_slot_candidates` stubbed, following the pattern in `tests/test_api.py`.
+
+### Meal Plan UI (Tab 3) — `ui/app.py`, `meal_plan_tab`
+Builds a 1–6 meal weekly menu one slot at a time and confirms it via `/api/v1/menu/confirm`. All
+state lives in `st.session_state["menu_draft"]` (the list of chosen `RecipeRead` dicts, in pick
+order) and `st.session_state["menu_finalizing"]` (`bool`).
+
+* **Selection mode** — shown while `len(menu_draft) < 6` and not finalizing. Header reads
+  `Choose Meal {len(menu_draft) + 1} of 6`. A text input + **Find Candidates** button calls
+  `GET /api/v1/menu/slot-candidates` with `q=<slot description>` and `exclude_ids` set to the ids
+  already in `menu_draft`, so a recipe can't be suggested twice for the same menu. Each of the
+  (up to 3) results renders title, cook time, and `final_score`, with a **+ Add to Menu** button
+  that appends `candidate["recipe"]` to `menu_draft` and reruns. Next to the slot input, a
+  **Finish Menu Early** button (disabled until at least 1 meal is picked) sets `menu_finalizing =
+  True` and reruns, dropping straight to the review screen regardless of how few meals were
+  chosen. Beneath the candidates, the same paginated library browse as the Search tab (own
+  `menu_browse_page` state, so it doesn't fight over pagination with the Search tab's browse) lets
+  the user add any saved recipe manually instead of describing a slot; recipes already in the
+  draft show "Already in this menu." instead of an Add button rather than being excluded from the
+  list.
+* **Review mode** — shown once 6 meals are picked, or after Finish Early. Lists every chosen
+  recipe with a **Remove** button; removing one pops it from `menu_draft` and always resets
+  `menu_finalizing = False`, so removal drops back to selection mode (`Choose Meal N of 6`) even if
+  the review screen was reached via Finish Early. A **Confirm & Lock Menu** button POSTs
+  `{"recipe_ids": [...]}` to `/api/v1/menu/confirm`; on success it shows the assigned
+  `menu_number`, clears `menu_draft`/`menu_finalizing`, and reruns back to an empty selection
+  screen for the next menu.
 
 ---
 

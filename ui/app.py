@@ -344,4 +344,168 @@ with search_tab:
                 st.rerun()
 
 with meal_plan_tab:
-    st.info("Coming soon.")
+    st.subheader("Weekly Menu Builder")
+
+    MENU_SIZE = 6
+
+    st.session_state.setdefault("menu_draft", [])
+    st.session_state.setdefault("menu_finalizing", False)
+
+    menu_draft = st.session_state["menu_draft"]
+    menu_finalizing = st.session_state["menu_finalizing"]
+
+    if len(menu_draft) < MENU_SIZE and not menu_finalizing:
+        st.markdown(f"**Choose Meal {len(menu_draft) + 1} of {MENU_SIZE}**")
+
+        find_col, finish_col = st.columns([3, 2])
+        with find_col:
+            slot_query = st.text_input(
+                "What's this meal?",
+                placeholder="e.g. quick weeknight soup",
+                key="menu_slot_query",
+            )
+            find_clicked = st.button("Find Candidates", key="menu_find_candidates_button")
+        with finish_col:
+            st.write("")
+            st.write("")
+            if st.button(
+                f"Finish Menu Early (Use Current {len(menu_draft)} Meals)",
+                key="menu_finish_early_button",
+                disabled=len(menu_draft) < 1,
+            ):
+                st.session_state["menu_finalizing"] = True
+                st.rerun()
+
+        if find_clicked:
+            if not slot_query.strip():
+                st.warning("Describe this meal slot first.")
+            else:
+                with st.spinner("Finding candidates..."):
+                    try:
+                        exclude_ids = ",".join(str(r["id"]) for r in menu_draft)
+                        response = requests.get(
+                            f"{API_BASE_URL}/api/v1/menu/slot-candidates",
+                            params={"q": slot_query.strip(), "exclude_ids": exclude_ids, "limit": 3},
+                            timeout=30,
+                        )
+                        response.raise_for_status()
+                        st.session_state["menu_slot_candidates"] = response.json()
+                    except requests.exceptions.HTTPError:
+                        detail = response.json().get("detail", response.text)
+                        st.error(f"Failed to find candidates: {detail}")
+                    except requests.exceptions.RequestException as e:
+                        st.error(f"Request failed: {e}")
+
+        candidates = st.session_state.get("menu_slot_candidates")
+        if candidates:
+            st.markdown("**Candidates**")
+            for candidate in candidates:
+                recipe = candidate["recipe"]
+                cook_time = recipe.get("cook_time_minutes")
+                cook_time_label = f"{cook_time} min" if cook_time else "—"
+                with st.container(border=True):
+                    st.markdown(f"**{recipe.get('title', 'Untitled Recipe')}**")
+                    st.caption(f"Cook time: {cook_time_label} | Match score: {candidate['final_score']:.2f}")
+                    if st.button("+ Add to Menu", key=f"menu_add_candidate_{recipe['id']}"):
+                        st.session_state["menu_draft"].append(recipe)
+                        st.session_state.pop("menu_slot_candidates", None)
+                        st.rerun()
+
+        st.divider()
+        st.markdown("**Or pick manually from your library**")
+
+        MENU_BROWSE_PAGE_SIZE = 20
+        st.session_state.setdefault("menu_browse_page", 0)
+
+        def fetch_menu_browse_page():
+            skip = st.session_state["menu_browse_page"] * MENU_BROWSE_PAGE_SIZE
+            response = requests.get(
+                f"{API_BASE_URL}/api/v1/recipes",
+                params={"skip": skip, "limit": MENU_BROWSE_PAGE_SIZE},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        try:
+            menu_library = fetch_menu_browse_page()
+        except requests.exceptions.RequestException as e:
+            menu_library = None
+            st.error(f"Could not load recipe library: {e}")
+
+        if menu_library is not None:
+            total = menu_library["total"]
+            items = menu_library["items"]
+            draft_ids = {r["id"] for r in menu_draft}
+
+            if total == 0:
+                st.info("No recipes saved yet.")
+            else:
+                last_page = (total - 1) // MENU_BROWSE_PAGE_SIZE
+                st.caption(
+                    f"{total} recipe{'s' if total != 1 else ''} — page {menu_library['page']} of {last_page + 1}"
+                )
+
+                for recipe in items:
+                    cook_time = recipe.get("cook_time_minutes")
+                    cook_time_label = f"{cook_time} min" if cook_time else "—"
+                    with st.container(border=True):
+                        st.markdown(f"**{recipe.get('title', 'Untitled Recipe')}**")
+                        st.caption(f"Cook time: {cook_time_label}")
+
+                        if recipe["id"] in draft_ids:
+                            st.caption("Already in this menu.")
+                        elif st.button("+ Add to Menu", key=f"menu_browse_add_{recipe['id']}"):
+                            st.session_state["menu_draft"].append(recipe)
+                            st.rerun()
+
+                nav_cols = st.columns(2)
+                if nav_cols[0].button(
+                    "Previous Page",
+                    key="menu_browse_prev",
+                    disabled=st.session_state["menu_browse_page"] <= 0,
+                ):
+                    st.session_state["menu_browse_page"] -= 1
+                    st.rerun()
+                if nav_cols[1].button(
+                    "Next Page",
+                    key="menu_browse_next",
+                    disabled=st.session_state["menu_browse_page"] >= last_page,
+                ):
+                    st.session_state["menu_browse_page"] += 1
+                    st.rerun()
+
+    else:
+        st.markdown("**Review Your Menu**")
+        st.caption(f"{len(menu_draft)} meal{'s' if len(menu_draft) != 1 else ''} selected.")
+
+        for i, recipe in enumerate(menu_draft):
+            with st.container(border=True):
+                title_col, remove_col = st.columns([4, 1])
+                title_col.markdown(f"**{recipe.get('title', 'Untitled Recipe')}**")
+                if remove_col.button("Remove", key=f"menu_remove_{recipe['id']}"):
+                    st.session_state["menu_draft"].pop(i)
+                    st.session_state["menu_finalizing"] = False
+                    st.rerun()
+
+        st.divider()
+        if st.button("Confirm & Lock Menu", key="menu_confirm_button", type="primary"):
+            with st.spinner("Saving menu..."):
+                try:
+                    response = requests.post(
+                        f"{API_BASE_URL}/api/v1/menu/confirm",
+                        json={"recipe_ids": [r["id"] for r in menu_draft]},
+                        timeout=30,
+                    )
+                    response.raise_for_status()
+                    saved_menu = response.json()
+                    st.success(f"Menu #{saved_menu['menu_number']} locked in with {len(menu_draft)} meals!")
+                    st.session_state["menu_draft"] = []
+                    st.session_state["menu_finalizing"] = False
+                    st.session_state.pop("menu_slot_candidates", None)
+                    st.rerun()
+                except requests.exceptions.HTTPError:
+                    detail = response.json().get("detail", response.text)
+                    st.error(f"Failed to confirm menu: {detail}")
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Request failed: {e}")

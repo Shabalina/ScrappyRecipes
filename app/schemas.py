@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -59,3 +60,25 @@ class WebSearchResult(BaseModel):
     title: str
     url: str
     snippet: str
+
+class SlotCandidateRead(BaseModel):
+    """A scored recipe candidate for a single menu slot."""
+    recipe: RecipeRead
+    distance: float = Field(description="Cosine distance to the slot query embedding.")
+    penalty: float = Field(description="Variety penalty from being used in a recent menu.")
+    final_score: float = Field(description="distance + penalty; candidates are ranked by this, ascending.")
+
+class MenuConfirmRequest(BaseModel):
+    recipe_ids: List[int] = Field(
+        ..., min_length=1, max_length=6, description="Recipe ids to place in this menu (1-6)."
+    )
+
+class MenuRead(BaseModel):
+    """A persisted menu as returned to clients."""
+    id: int
+    menu_number: int
+    created_at: datetime
+    recipe_ids: List[int]
+
+    class Config:
+        from_attributes = True

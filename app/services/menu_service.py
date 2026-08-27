@@ -68,7 +68,9 @@ async def get_slot_candidates(
     #    stay in "cooldown" longer before they're eligible to resurface.
     total_recipes = await db.scalar(select(func.count()).select_from(RecipeModel)) or 0
     max_menu_number = await db.scalar(select(func.max(MenuModel.menu_number))) or 0
-    window = max(1, total_recipes // 12)
+    upcoming_menu_number = max_menu_number + 1
+    # window = max(1, total_recipes // 12)
+    window = max(1, int(round((total_recipes / 6) / 2)))
 
     # 3. Score: cosine distance plus a linear-decay penalty for recipes used
     #    within the last `window` menus. Never-used and long-expired recipes
@@ -77,7 +79,8 @@ async def get_slot_candidates(
     for recipe, recipe_distance in rows:
         penalty = 0.0
         if recipe.last_menu_number is not None:
-            elapsed = max_menu_number - recipe.last_menu_number
+            # elapsed = max_menu_number - recipe.last_menu_number
+            elapsed = upcoming_menu_number - recipe.last_menu_number
             if 1 <= elapsed <= window:
                 penalty = VARIETY_PENALTY_ALPHA * (window - elapsed + 1) / window
 
