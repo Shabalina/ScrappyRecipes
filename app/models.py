@@ -32,3 +32,4 @@ class MenuModel(Base):
     menu_number = Column(Integer, nullable=False, unique=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     recipe_ids = Column(JSON, nullable=False, default=list)
+    shopping_list = Column(JSON, nullable=True)

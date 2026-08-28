@@ -63,7 +63,9 @@ def save_draft(draft, session_key, button_key):
                 st.error(f"Request failed: {e}")
 
 
-ingestion_tab, search_tab, meal_plan_tab = st.tabs(["Ingestion", "Search", "Meal Plan"])
+ingestion_tab, search_tab, meal_plan_tab, existing_menus_tab = st.tabs(
+    ["Parse Recipe", "Search & Browse", "Menu Builder", "Existing Menus"]
+)
 
 with ingestion_tab:
     url_tab, text_tab, images_tab = st.tabs(["From URL", "From Text", "From Images"])
@@ -509,3 +511,87 @@ with meal_plan_tab:
                     st.error(f"Failed to confirm menu: {detail}")
                 except requests.exceptions.RequestException as e:
                     st.error(f"Request failed: {e}")
+
+with existing_menus_tab:
+    st.subheader("Your Saved Menus")
+
+    def open_shopping_list_dialog(menu_id, menu_number):
+        @st.dialog(f"Shopping List - Menu #{menu_number}")
+        def _dialog():
+            with st.spinner("Generating shopping list..."):
+                try:
+                    response = requests.get(
+                        f"{API_BASE_URL}/api/v1/menus/{menu_id}/shopping-list",
+                        timeout=60,
+                    )
+                    response.raise_for_status()
+                    shopping_list = response.json()
+                except requests.exceptions.HTTPError:
+                    detail = response.json().get("detail", response.text)
+                    st.error(f"Failed to load shopping list: {detail}")
+                    return
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Request failed: {e}")
+                    return
+
+            copy_lines = [f"Shopping List - Menu #{menu_number}", ""]
+            for category in shopping_list.get("categories", []):
+                st.markdown(f"**{category['category']}**")
+                copy_lines.append(f"{category['category']}:")
+                for item in category.get("items", []):
+                    unit = f" {item['unit']}" if item.get("unit") else ""
+                    st.markdown(f"• {item['quantity']}{unit} {item['item']}")
+                    copy_lines.append(f"- {item['quantity']}{unit} {item['item']}")
+                    if item.get("sources"):
+                        sources = ", ".join(item["sources"])
+                        st.caption(f"(from: {sources})")
+                copy_lines.append("")
+
+            st.divider()
+            st.caption("Copy for your notes app:")
+            st.code("\n".join(copy_lines), language=None)
+
+        _dialog()
+
+    def fetch_all_menus():
+        response = requests.get(
+            f"{API_BASE_URL}/api/v1/menus",
+            params={"limit": 100, "skip": 0},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    try:
+        saved_menus = fetch_all_menus()
+    except requests.exceptions.RequestException as e:
+        saved_menus = None
+        st.error(f"Could not load menus: {e}")
+
+    if saved_menus is not None:
+        if not saved_menus:
+            st.info("No saved menus found. Create one in the Menu Builder tab.")
+        else:
+            saved_menus = sorted(saved_menus, key=lambda m: m["menu_number"], reverse=True)
+            max_menu_number = saved_menus[0]["menu_number"]
+
+            for menu in saved_menus:
+                is_active = menu["menu_number"] == max_menu_number
+                created_date = menu["created_at"][:10] if menu.get("created_at") else "unknown date"
+
+                with st.container(border=True):
+                    if is_active:
+                        st.markdown("🟢 **Active Current Menu**")
+                    st.markdown(f"**Menu #{menu['menu_number']} — Saved on {created_date}**")
+
+                    for recipe in menu.get("recipes", []):
+                        cook_time = recipe.get("cook_time_minutes")
+                        cook_time_label = f"{cook_time} min" if cook_time else "—"
+                        st.markdown(f"- {recipe['title']} ({cook_time_label})")
+
+                    if st.button(
+                        "View Shopping List",
+                        key=f"view_shopping_list_{menu['id']}",
+                        type="primary",
+                    ):
+                        open_shopping_list_dialog(menu["id"], menu["menu_number"])

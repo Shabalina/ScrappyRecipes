@@ -10,6 +10,7 @@ load_dotenv()
 
 from app.database import Base, engine, get_db
 from app.models import RecipeModel
+from app.routers.menu import history_router as menu_history_router
 from app.routers.menu import router as menu_router
 from app.schemas import (
     ParseTextRequest,
@@ -53,6 +54,7 @@ app = FastAPI(
 router_service = LLMRouterService()
 
 app.include_router(menu_router)
+app.include_router(menu_history_router)
 
 
 @app.get("/health", status_code=status.HTTP_200_OK)

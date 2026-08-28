@@ -68,6 +68,20 @@ class SlotCandidateRead(BaseModel):
     penalty: float = Field(description="Variety penalty from being used in a recent menu.")
     final_score: float = Field(description="distance + penalty; candidates are ranked by this, ascending.")
 
+class ShoppingListItem(BaseModel):
+    item: str = Field(description="Consolidated grocery item name, e.g. 'Brown Onion'.")
+    quantity: str = Field(description="Combined quantity across all recipes that need it, e.g. '3'.")
+    unit: Optional[str] = Field(None, description="Unit of measurement, e.g. 'medium', 'cups', 'g'.")
+    sources: List[str] = Field(description="Titles of the recipes that call for this item.")
+
+class ShoppingListCategory(BaseModel):
+    category: str = Field(description="Grocery store section, e.g. 'Produce', 'Meat & Seafood'.")
+    items: List[ShoppingListItem]
+
+class ShoppingListResult(BaseModel):
+    """Consolidated, categorized shopping list for a menu; cached on `MenuModel.shopping_list`."""
+    categories: List[ShoppingListCategory]
+
 class MenuConfirmRequest(BaseModel):
     recipe_ids: List[int] = Field(
         ..., min_length=1, max_length=6, description="Recipe ids to place in this menu (1-6)."
@@ -79,6 +93,29 @@ class MenuRead(BaseModel):
     menu_number: int
     created_at: datetime
     recipe_ids: List[int]
+    shopping_list: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MenuRecipeSummary(BaseModel):
+    """Minimal recipe metadata for a menu history entry."""
+    id: int
+    title: str
+    cook_time_minutes: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MenuHistoryRead(BaseModel):
+    """A persisted menu with its recipes' metadata, for menu history browsing."""
+    id: int
+    menu_number: int
+    created_at: datetime
+    shopping_list: Optional[dict] = None
+    recipes: List[MenuRecipeSummary]
 
     class Config:
         from_attributes = True

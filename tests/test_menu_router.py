@@ -18,6 +18,7 @@ from app.services.menu_service import SlotCandidate
 
 SLOT_CANDIDATES = "/api/v1/menu/slot-candidates"
 CONFIRM = "/api/v1/menu/confirm"
+MENUS = "/api/v1/menus"
 
 
 def recipe_row(sample_recipe, recipe_id):
@@ -34,6 +35,32 @@ def recipe_row(sample_recipe, recipe_id):
         cooking_methods=sample_recipe.cooking_methods,
         tags=sample_recipe.tags,
     )
+
+
+def menu_row(id, menu_number, recipe_ids, shopping_list=None, created_at=None):
+    """A stand-in for the MenuModel a menu history entry wraps."""
+    return SimpleNamespace(
+        id=id,
+        menu_number=menu_number,
+        created_at=created_at or datetime(2026, 1, 1, tzinfo=timezone.utc),
+        recipe_ids=recipe_ids,
+        shopping_list=shopping_list,
+    )
+
+
+def stub_list_menus_db(mock_db_session, menus, recipes=None):
+    """Wires db.execute for GET /api/v1/menus: menus query, then (if any recipe
+    ids are referenced) a second query for their metadata."""
+    menus_result = MagicMock()
+    menus_result.scalars.return_value.all.return_value = menus
+
+    results = [menus_result]
+    if recipes is not None:
+        recipes_result = MagicMock()
+        recipes_result.scalars.return_value.all.return_value = recipes
+        results.append(recipes_result)
+
+    mock_db_session.execute = AsyncMock(side_effect=results)
 
 
 def stub_confirm_db(mock_db_session, max_menu_number, assigned_id=1):
@@ -203,3 +230,87 @@ class TestConfirmMenu:
 
         assert r.status_code == 500
         assert "Could not confirm menu" in r.json()["detail"]
+
+
+class TestListMenus:
+    def test_returns_menus_with_recipe_metadata(self, api, sample_recipe):
+        menu = menu_row(id=10, menu_number=4, recipe_ids=[1, 2])
+        recipes = [recipe_row(sample_recipe, 1), recipe_row(sample_recipe, 2)]
+        stub_list_menus_db(api.db, [menu], recipes)
+
+        r = api.client.get(MENUS)
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert len(body) == 1
+        assert body[0]["id"] == 10
+        assert body[0]["menu_number"] == 4
+        assert [rec["id"] for rec in body[0]["recipes"]] == [1, 2]
+        assert body[0]["recipes"][0]["title"] == sample_recipe.title
+        assert body[0]["recipes"][0]["cook_time_minutes"] == sample_recipe.cook_time_minutes
+
+    def test_no_menus_returns_empty_list(self, api):
+        stub_list_menus_db(api.db, [])
+
+        r = api.client.get(MENUS)
+
+        assert r.status_code == 200
+        assert r.json() == []
+        # Only the menus query should run — no recipe ids to look up.
+        assert api.db.execute.await_count == 1
+
+    def test_missing_recipe_is_omitted_not_errored(self, api, sample_recipe):
+        menu = menu_row(id=1, menu_number=1, recipe_ids=[1, 99])
+        recipes = [recipe_row(sample_recipe, 1)]  # 99 was deleted after this menu was confirmed
+        stub_list_menus_db(api.db, [menu], recipes)
+
+        r = api.client.get(MENUS)
+
+        assert r.status_code == 200, r.text
+        assert [rec["id"] for rec in r.json()[0]["recipes"]] == [1]
+
+    def test_orders_by_menu_number_descending(self, api):
+        stub_list_menus_db(api.db, [])
+
+        api.client.get(MENUS)
+
+        stmt = api.db.execute.call_args_list[0].args[0]
+        assert "ORDER BY menus.menu_number DESC" in str(stmt)
+
+    def test_limit_and_skip_are_forwarded(self, api):
+        stub_list_menus_db(api.db, [])
+
+        r = api.client.get(MENUS, params={"limit": 5, "skip": 10})
+
+        assert r.status_code == 200, r.text
+        stmt = api.db.execute.call_args_list[0].args[0]
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "LIMIT 5" in compiled
+        assert "OFFSET 10" in compiled
+
+    def test_limit_defaults_to_ten(self, api):
+        stub_list_menus_db(api.db, [])
+
+        api.client.get(MENUS)
+
+        stmt = api.db.execute.call_args_list[0].args[0]
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "LIMIT 10" in compiled
+
+    def test_limit_above_max_is_422(self, api):
+        r = api.client.get(MENUS, params={"limit": 101})
+
+        assert r.status_code == 422
+
+    def test_skip_below_zero_is_422(self, api):
+        r = api.client.get(MENUS, params={"skip": -1})
+
+        assert r.status_code == 422
+
+    def test_database_failure_is_500(self, api):
+        api.db.execute = AsyncMock(side_effect=RuntimeError("connection refused"))
+
+        r = api.client.get(MENUS)
+
+        assert r.status_code == 500
+        assert "Could not list menus" in r.json()["detail"]

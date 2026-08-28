@@ -33,7 +33,7 @@ Scrappy Recipes is an AI-powered recipe extraction and semantic search service b
 
 ### Testing
 `tests/` is a **pytest suite with every LLM and HTTP call mocked** — it needs no API keys, makes
-no network requests, and costs nothing. 96 tests, ~3s.
+no network requests, and costs nothing. 132 tests, ~3s.
 
 * **Run everything:** `venv/bin/python -m pytest`
 * **One file:** `venv/bin/python -m pytest tests/test_router.py`
@@ -74,14 +74,17 @@ loudly on a stub instead of quietly billing a real request.
 │   ├── schemas.py                  # Pydantic schemas (RecipeRead, ParseTextRequest, etc.)
 │   └── services/
 │       ├── embedding_service.py    # generate_embedding() — OpenAI text-embedding-3-small
-│       ├── llm_parser.py           # RecipeParserService: text (OpenAI) + image (Gemini) parsing
+│       ├── llm_parser.py           # RecipeParserService: text (OpenAI) + image (Gemini) parsing,
+│                                    # + generate_shopping_list() (OpenAI) for menu aggregation
 │       ├── menu_service.py         # get_slot_candidates() — scored recipe candidates for a menu slot
 │       ├── recipe_db_service.py    # Recipe persistence helpers (save + delete)
 │       ├── router_service.py       # LLMRouterService for text, url, image routing
 │       ├── scraper_service.py      # URL fetching & HTML extraction
+│       ├── shopping_service.py     # generate_menu_shopping_list() — cached, LLM-aggregated shopping list
 │       └── web_search_service.py   # search_recipes_web() — DuckDuckGo (ddgs) top-3 lookup
 │   └── routers/
-│       └── menu.py                 # Menu endpoints: slot-candidates (read-only), confirm (write)
+│       └── menu.py                 # Menu endpoints: slot-candidates (read-only), confirm (write),
+│                                    # menu history + shopping-list (read-only, on the /api/v1/menus router)
 ├── tests/                          # Mocked pytest suite — no API keys, no network
 │   ├── conftest.py                 # Fixtures: stubbed LLM clients, sample recipe, DB double
 │   ├── test_api.py                 # Endpoint contracts: draft → confirm, error mapping
@@ -91,6 +94,7 @@ loudly on a stub instead of quietly billing a real request.
 │   ├── test_persistence.py         # Embedding text/vector + DB save
 │   ├── test_menu_service.py        # Slot candidate scoring: exclusion, variety penalty, expiry
 │   ├── test_menu_router.py         # Menu endpoint contracts: slot-candidates, confirm
+│   ├── test_shopping_service.py    # Shopping list generation + caching, and its endpoint
 │   ├── live/                       # Opt-in real-API checks (not collected by pytest)
 │   │   ├── README.md
 │   │   ├── check_parsers.py
@@ -100,7 +104,8 @@ loudly on a stub instead of quietly billing a real request.
 │       ├── recipe_page1.jpeg
 │       └── recipe_page2.jpeg
 ├── ui/
-│   └── app.py                      # Streamlit UI: Ingestion, Search, Meal Plan tabs
+│   └── app.py                      # Streamlit UI: Parse Recipe, Search & Browse, Menu Builder,
+│                                    # Existing Menus tabs
 ├── alembic/                        # DB migrations
 │   ├── env.py
 │   ├── script.py.mako
@@ -138,6 +143,12 @@ loudly on a stub instead of quietly billing a real request.
   (`app/routers/menu.py`) (see below).
 - [x] Streamlit UI Tab 3 (Meal Plan): builds a 1–6 meal weekly menu slot-by-slot and confirms it
   (see below).
+- [x] `MenuModel.shopping_list` column (migration `8e1ad5807d15`) and `GET /api/v1/menus` menu
+  history endpoint (see below).
+- [x] Shopping list aggregation: `generate_menu_shopping_list()` and
+  `GET /api/v1/menus/{menu_id}/shopping-list` (see below).
+- [x] Streamlit UI Tab 4 (Existing Menus): browse saved menus, highlight the active one, and view
+  each one's shopping list in a modal dialog (see below).
 
 ### The draft → confirm flow
 Parsing and persistence are deliberately separate. Parse endpoints are **read-only**: they return
@@ -169,6 +180,8 @@ on restart or across multiple workers.
 | `/api/v1/recipes/{recipe_id}` | DELETE | 204 / 404 | — → no body | **yes** (delete) |
 | `/api/v1/menu/slot-candidates` | GET | 200 | `?q=&exclude_ids=&limit=` → `List[SlotCandidateRead]` | no |
 | `/api/v1/menu/confirm` | POST | 201 | `MenuConfirmRequest` → `MenuRead` | **yes** |
+| `/api/v1/menus` | GET | 200 | `?limit=&skip=` → `List[MenuHistoryRead]` | no |
+| `/api/v1/menus/{menu_id}/shopping-list` | GET | 200 / 404 | — → `ShoppingListResult` | **yes** (cache only, on first call) |
 | `/health` | GET | 200 | — | no |
 
 `RecipeRead` does not expose the `embedding` column: it is 1536 floats (~25KB of JSON) per row,
@@ -249,6 +262,10 @@ Added in migration `d5f0ee3eb3ce` (`alembic/versions/d5f0ee3eb3ce_*.py`), applie
 `last_menu_number` and `menus` are now populated by `POST /api/v1/menu/confirm` (see below), driven
 by the Meal Plan UI tab (see below).
 
+`MenuModel` also has a nullable `shopping_list: JSON` column, added in migration `8e1ad5807d15`
+(`alembic/versions/8e1ad5807d15_*.py`). `POST /api/v1/menu/confirm` always inserts `NULL` — it is
+populated lazily, on first request, by `generate_menu_shopping_list()` (see below).
+
 ### Menu slot candidate scoring — `get_slot_candidates()`
 `app/services/menu_service.py` picks recipe candidates for a single slot in a generated menu. It
 combines pgvector semantic similarity with a "variety" penalty so a rotation doesn't keep
@@ -301,7 +318,54 @@ write path for menus.
 Covered by `tests/test_menu_router.py` — both endpoints through `TestClient` with `get_db`
 overridden and `get_slot_candidates` stubbed, following the pattern in `tests/test_api.py`.
 
-### Meal Plan UI (Tab 3) — `ui/app.py`, `meal_plan_tab`
+### Menu history endpoint — `GET /api/v1/menus`
+Lives in `app/routers/menu.py` but on its own `APIRouter` (`history_router`, prefix
+`/api/v1/menus`, plural) rather than `router` (prefix `/api/v1/menu`, singular) — both are
+included separately in `app/main.py`. Read-only: lists confirmed menus newest-first
+(`ORDER BY menu_number DESC`), paginated via `limit` (default `10`, `1–100`) and `skip` (default
+`0`). For each menu it resolves `recipe_ids` to full recipe metadata (`id`, `title`,
+`cook_time_minutes`) via a second query batched across every menu on the page (one `WHERE id IN
+(...)`, not one query per menu), returned as `MenuHistoryRead.recipes` in `recipe_ids` order. An
+id that no longer resolves to a row (the recipe was deleted after the menu was confirmed) is
+silently dropped from `recipes` rather than erroring. `500` on an unexpected DB failure.
+
+### Shopping list aggregation — `generate_menu_shopping_list()`
+`app/services/shopping_service.py` turns a confirmed menu's recipes into one consolidated,
+categorized grocery list, exposed via `GET /api/v1/menus/{menu_id}/shopping-list`
+(`app/routers/menu.py`, on `history_router`).
+
+1. **Cache check.** Looks the menu up with `AsyncSession.get`; a missing menu returns `None`
+   (mapped to `404` by the router). If `menu.shopping_list` is already populated, it's returned
+   immediately — no LLM call, no write.
+2. **Collect ingredients.** Otherwise queries every `RecipeModel` in `menu.recipe_ids` (one
+   `WHERE id IN (...)`), reorders the results back into `recipe_ids` order, and silently drops any
+   id that no longer resolves to a row — the same "deleted after the menu was confirmed" tolerance
+   as `GET /api/v1/menus`.
+3. **LLM consolidation.** `RecipeParserService.generate_shopping_list()` (`app/services/llm_parser.py`,
+   OpenAI `gpt-4o-mini` via `beta.chat.completions.parse`, mirroring `parse_text_recipe`) is given
+   every recipe's title and ingredients and asked to merge identical/equivalent items into one
+   entry with a combined quantity, and group them into grocery sections (Produce, Meat & Seafood,
+   Dairy & Refrigerated, Bakery, Pantry & Spices, Other). Structured output is `ShoppingListResult`
+   (`app/schemas.py`): `{"categories": [{"category": str, "items": [{"item", "quantity", "unit",
+   "sources": [recipe titles]}]}]}`.
+4. **Persist.** The result is written to `menu.shopping_list` and committed — every later request
+   for the same `menu_id` hits the cache from step 1.
+
+`generate_menu_shopping_list(db, menu_id, parser=None)` accepts an optional `RecipeParserService`
+for injection (tests pass a stub); the router and production code leave it `None` and a real
+service is constructed on demand — only when generation is actually needed, not on every request.
+`500` on an unexpected failure (DB or LLM). Covered by `tests/test_shopping_service.py`: cache
+hit/miss at the service level (asserting the LLM is *not* called on a hit), recipe ordering and
+deleted-recipe tolerance, and the endpoint's 200/404/500 contract via `TestClient` with
+`generate_menu_shopping_list` stubbed.
+
+### The four UI tabs
+`ui/app.py` renders four top-level tabs, in this order: **Parse Recipe** (ingestion, the code's
+`ingestion_tab`), **Search & Browse** (`search_tab`), **Menu Builder** (`meal_plan_tab`), and
+**Existing Menus** (`existing_menus_tab`). The variable names predate this renaming and were left
+as-is to avoid a churny rename across the whole file; the tab *labels* are what changed.
+
+### Meal Plan UI (Tab 3, "Menu Builder") — `ui/app.py`, `meal_plan_tab`
 Builds a 1–6 meal weekly menu one slot at a time and confirms it via `/api/v1/menu/confirm`. All
 state lives in `st.session_state["menu_draft"]` (the list of chosen `RecipeRead` dicts, in pick
 order) and `st.session_state["menu_finalizing"]` (`bool`).
@@ -326,6 +390,29 @@ order) and `st.session_state["menu_finalizing"]` (`bool`).
   `{"recipe_ids": [...]}` to `/api/v1/menu/confirm`; on success it shows the assigned
   `menu_number`, clears `menu_draft`/`menu_finalizing`, and reruns back to an empty selection
   screen for the next menu.
+
+### Existing Menus UI (Tab 4) — `ui/app.py`, `existing_menus_tab`
+Read-only browsing of confirmed menus, backed entirely by `GET /api/v1/menus` (fetched with
+`limit=100` — no pagination controls, since a household isn't expected to accumulate more menus
+than that) and `GET /api/v1/menus/{menu_id}/shopping-list`. No client-side state persists across
+reruns beyond what those two calls return each time.
+
+* **Empty state** — if `GET /api/v1/menus` returns `[]`, shows an info message: "No saved menus
+  found. Create one in the Menu Builder tab."
+* **Listing** — menus are sorted client-side by `menu_number` descending (the API already returns
+  them in that order, but the UI re-sorts defensively rather than trusting response order). The
+  menu with the highest `menu_number` gets a "🟢 Active Current Menu" badge above its header.
+  Each menu renders in a bordered container: `Menu #{menu_number} — Saved on {created_at[:10]}`,
+  then every recipe as `- {title} ({cook_time_minutes} min)`.
+* **Shopping list dialog** — each card has a `View Shopping List` button. Because `st.dialog`'s
+  title is fixed at decoration time, `open_shopping_list_dialog(menu_id, menu_number)` defines and
+  immediately invokes a freshly decorated `@st.dialog(f"Shopping List - Menu #{menu_number}")`
+  function per click, rather than one dialog function decorated once at module load — that's what
+  lets the title carry the specific menu number. Inside, it calls the shopping-list endpoint with
+  a spinner (first call per menu is slower — that's the LLM aggregation call described above;
+  later opens hit the cached column), then renders items grouped by category with quantity/unit/
+  name and a `(from: ...)` caption listing source recipe titles. A trailing `st.code` block
+  reflows the same categories/items into plain text for pasting into a phone notes app.
 
 ---
 
