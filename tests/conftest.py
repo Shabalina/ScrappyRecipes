@@ -19,6 +19,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.schemas import IngredientItem, RecipeCreate
 
+TEST_API_KEY = "local_dev_secret_key_123"
+API_KEY_HEADERS = {"X-API-Key": TEST_API_KEY}
+
 
 # --------------------------------------------------------------------------
 # Safety net
@@ -29,6 +32,7 @@ def _no_live_api(monkeypatch):
     """Guarantee no test inherits real credentials from the developer's .env."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key-not-real")
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key-not-real")
+    monkeypatch.setenv("APP_API_KEY", TEST_API_KEY)
 
 
 # --------------------------------------------------------------------------

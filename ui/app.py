@@ -3,9 +3,37 @@ import os
 import requests
 import streamlit as st
 
+st.set_page_config(page_title="Scrappy Recipes", layout="centered")
+
+def get_secret(key: str, default: str = "") -> str:
+  """Safely retrieve secrets from st.secrets or environment variables."""
+  try:
+    if hasattr(st, "secrets") and key in st.secrets:
+      return st.secrets[key]
+  except Exception:
+    pass
+  return os.getenv(key, default)
+
+
+APP_API_KEY = get_secret("APP_API_KEY", "local_dev_secret_key_123")
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
-st.set_page_config(page_title="Scrappy Recipes", layout="centered")
+api_session = requests.Session()
+api_session.headers.update({"X-API-Key": APP_API_KEY})
+
+
+def show_api_error(response, action):
+  """Renders an HTTPError as an st.error, calling out an auth failure specifically."""
+  if response.status_code == 403:
+    st.error("Authentication failed: Invalid API Key")
+    return
+  try:
+    detail = response.json().get("detail", response.text)
+  except ValueError:
+    detail = response.text
+  st.error(f"{action}: {detail}")
+
+
 st.title("Scrappy Recipes")
 
 # A widget's session_state key can't be reassigned after the widget has been
@@ -47,7 +75,7 @@ def save_draft(draft, session_key, button_key):
     if st.button("Approve & Save", key=button_key):
         with st.spinner("Saving recipe..."):
             try:
-                response = requests.post(
+                response = api_session.post(
                     f"{API_BASE_URL}/api/v1/recipes/confirm",
                     json=draft,
                     timeout=60,
@@ -57,8 +85,7 @@ def save_draft(draft, session_key, button_key):
                 st.success(f"Saved recipe #{saved['id']}: {saved['title']}")
                 del st.session_state[session_key]
             except requests.exceptions.HTTPError:
-                detail = response.json().get("detail", response.text)
-                st.error(f"Failed to save recipe: {detail}")
+                show_api_error(response, "Failed to save recipe")
             except requests.exceptions.RequestException as e:
                 st.error(f"Request failed: {e}")
 
@@ -89,7 +116,7 @@ with ingestion_tab:
             else:
                 with st.spinner("Fetching and parsing recipe..."):
                     try:
-                        response = requests.post(
+                        response = api_session.post(
                             f"{API_BASE_URL}/api/v1/recipes/parse-url",
                             json={"url": recipe_url.strip()},
                             timeout=60,
@@ -97,8 +124,7 @@ with ingestion_tab:
                         response.raise_for_status()
                         st.session_state["draft_recipe_url"] = response.json()
                     except requests.exceptions.HTTPError:
-                        detail = response.json().get("detail", response.text)
-                        st.error(f"Failed to parse recipe: {detail}")
+                        show_api_error(response, "Failed to parse recipe")
                     except requests.exceptions.RequestException as e:
                         st.error(f"Request failed: {e}")
 
@@ -122,7 +148,7 @@ with ingestion_tab:
             else:
                 with st.spinner("Parsing recipe..."):
                     try:
-                        response = requests.post(
+                        response = api_session.post(
                             f"{API_BASE_URL}/api/v1/recipes/parse-text",
                             json={"text": recipe_text.strip()},
                             timeout=60,
@@ -130,8 +156,7 @@ with ingestion_tab:
                         response.raise_for_status()
                         st.session_state["draft_recipe_text"] = response.json()
                     except requests.exceptions.HTTPError:
-                        detail = response.json().get("detail", response.text)
-                        st.error(f"Failed to parse recipe: {detail}")
+                        show_api_error(response, "Failed to parse recipe")
                     except requests.exceptions.RequestException as e:
                         st.error(f"Request failed: {e}")
 
@@ -164,7 +189,7 @@ with ingestion_tab:
                             ("files", (image.name, image.getvalue(), image.type))
                             for image in recipe_images
                         ]
-                        response = requests.post(
+                        response = api_session.post(
                             f"{API_BASE_URL}/api/v1/recipes/parse-images",
                             files=files,
                             timeout=60,
@@ -172,8 +197,7 @@ with ingestion_tab:
                         response.raise_for_status()
                         st.session_state["draft_recipe_images"] = response.json()
                     except requests.exceptions.HTTPError:
-                        detail = response.json().get("detail", response.text)
-                        st.error(f"Failed to parse recipe: {detail}")
+                        show_api_error(response, "Failed to parse recipe")
                     except requests.exceptions.RequestException as e:
                         st.error(f"Request failed: {e}")
 
@@ -207,7 +231,7 @@ with search_tab:
         else:
             with st.spinner("Searching local recipes..."):
                 try:
-                    response = requests.get(
+                    response = api_session.get(
                         f"{API_BASE_URL}/api/v1/recipes/search",
                         params={"q": search_query.strip(), "limit": 1},
                         timeout=30,
@@ -217,8 +241,7 @@ with search_tab:
                     st.session_state["local_search_result"] = results[0] if results else None
                     st.session_state.pop("web_search_results", None)
                 except requests.exceptions.HTTPError:
-                    detail = response.json().get("detail", response.text)
-                    st.error(f"Search failed: {detail}")
+                    show_api_error(response, "Search failed")
                 except requests.exceptions.RequestException as e:
                     st.error(f"Request failed: {e}")
 
@@ -235,7 +258,7 @@ with search_tab:
             if st.button("Delete Recipe", key=f"delete_recipe_{result['id']}"):
                 with st.spinner("Deleting recipe..."):
                     try:
-                        del_response = requests.delete(
+                        del_response = api_session.delete(
                             f"{API_BASE_URL}/api/v1/recipes/{result['id']}",
                             timeout=30,
                         )
@@ -244,8 +267,7 @@ with search_tab:
                         st.session_state.pop("local_search_result", None)
                         st.rerun()
                     except requests.exceptions.HTTPError:
-                        detail = del_response.json().get("detail", del_response.text)
-                        st.error(f"Failed to delete recipe: {detail}")
+                        show_api_error(del_response, "Failed to delete recipe")
                     except requests.exceptions.RequestException as e:
                         st.error(f"Request failed: {e}")
 
@@ -254,7 +276,7 @@ with search_tab:
         if st.button("Search Web for this Query", key="search_web_button"):
             with st.spinner("Searching the web..."):
                 try:
-                    web_response = requests.get(
+                    web_response = api_session.get(
                         f"{API_BASE_URL}/api/v1/recipes/search-web",
                         params={"query": search_query.strip()},
                         timeout=30,
@@ -262,8 +284,7 @@ with search_tab:
                     web_response.raise_for_status()
                     st.session_state["web_search_results"] = web_response.json()
                 except requests.exceptions.HTTPError:
-                    detail = web_response.json().get("detail", web_response.text)
-                    st.error(f"Web search failed: {detail}")
+                    show_api_error(web_response, "Web search failed")
                 except requests.exceptions.RequestException as e:
                     st.error(f"Request failed: {e}")
 
@@ -287,7 +308,7 @@ with search_tab:
 
     def fetch_browse_page():
         skip = st.session_state["browse_page"] * BROWSE_PAGE_SIZE
-        response = requests.get(
+        response = api_session.get(
             f"{API_BASE_URL}/api/v1/recipes",
             params={"skip": skip, "limit": BROWSE_PAGE_SIZE},
             timeout=30,
@@ -324,7 +345,7 @@ with search_tab:
                     if st.button("Delete Recipe", key=f"browse_delete_{recipe['id']}"):
                         with st.spinner("Deleting recipe..."):
                             try:
-                                del_response = requests.delete(
+                                del_response = api_session.delete(
                                     f"{API_BASE_URL}/api/v1/recipes/{recipe['id']}",
                                     timeout=30,
                                 )
@@ -332,8 +353,7 @@ with search_tab:
                                 st.success(f"Deleted recipe #{recipe['id']}.")
                                 st.rerun()
                             except requests.exceptions.HTTPError:
-                                detail = del_response.json().get("detail", del_response.text)
-                                st.error(f"Failed to delete recipe: {detail}")
+                                show_api_error(del_response, "Failed to delete recipe")
                             except requests.exceptions.RequestException as e:
                                 st.error(f"Request failed: {e}")
 
@@ -385,7 +405,7 @@ with meal_plan_tab:
                 with st.spinner("Finding candidates..."):
                     try:
                         exclude_ids = ",".join(str(r["id"]) for r in menu_draft)
-                        response = requests.get(
+                        response = api_session.get(
                             f"{API_BASE_URL}/api/v1/menu/slot-candidates",
                             params={"q": slot_query.strip(), "exclude_ids": exclude_ids, "limit": 3},
                             timeout=30,
@@ -393,8 +413,7 @@ with meal_plan_tab:
                         response.raise_for_status()
                         st.session_state["menu_slot_candidates"] = response.json()
                     except requests.exceptions.HTTPError:
-                        detail = response.json().get("detail", response.text)
-                        st.error(f"Failed to find candidates: {detail}")
+                        show_api_error(response, "Failed to find candidates")
                     except requests.exceptions.RequestException as e:
                         st.error(f"Request failed: {e}")
 
@@ -421,7 +440,7 @@ with meal_plan_tab:
 
         def fetch_menu_browse_page():
             skip = st.session_state["menu_browse_page"] * MENU_BROWSE_PAGE_SIZE
-            response = requests.get(
+            response = api_session.get(
                 f"{API_BASE_URL}/api/v1/recipes",
                 params={"skip": skip, "limit": MENU_BROWSE_PAGE_SIZE},
                 timeout=30,
@@ -494,7 +513,7 @@ with meal_plan_tab:
         if st.button("Confirm & Lock Menu", key="menu_confirm_button", type="primary"):
             with st.spinner("Saving menu..."):
                 try:
-                    response = requests.post(
+                    response = api_session.post(
                         f"{API_BASE_URL}/api/v1/menu/confirm",
                         json={"recipe_ids": [r["id"] for r in menu_draft]},
                         timeout=30,
@@ -507,8 +526,7 @@ with meal_plan_tab:
                     st.session_state.pop("menu_slot_candidates", None)
                     st.rerun()
                 except requests.exceptions.HTTPError:
-                    detail = response.json().get("detail", response.text)
-                    st.error(f"Failed to confirm menu: {detail}")
+                    show_api_error(response, "Failed to confirm menu")
                 except requests.exceptions.RequestException as e:
                     st.error(f"Request failed: {e}")
 
@@ -520,15 +538,14 @@ with existing_menus_tab:
         def _dialog():
             with st.spinner("Generating shopping list..."):
                 try:
-                    response = requests.get(
+                    response = api_session.get(
                         f"{API_BASE_URL}/api/v1/menus/{menu_id}/shopping-list",
                         timeout=60,
                     )
                     response.raise_for_status()
                     shopping_list = response.json()
                 except requests.exceptions.HTTPError:
-                    detail = response.json().get("detail", response.text)
-                    st.error(f"Failed to load shopping list: {detail}")
+                    show_api_error(response, "Failed to load shopping list")
                     return
                 except requests.exceptions.RequestException as e:
                     st.error(f"Request failed: {e}")
@@ -554,7 +571,7 @@ with existing_menus_tab:
         _dialog()
 
     def fetch_all_menus():
-        response = requests.get(
+        response = api_session.get(
             f"{API_BASE_URL}/api/v1/menus",
             params={"limit": 100, "skip": 0},
             timeout=30,

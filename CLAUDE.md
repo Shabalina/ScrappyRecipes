@@ -13,6 +13,7 @@ Scrappy Recipes is an AI-powered recipe extraction and semantic search service b
     (verified working 2026-08-09)
 * **Web Search Fallback:** DuckDuckGo via `ddgs` (`DDGS().text(...)`) — `app/services/web_search_service.py`
 * **UI:** Streamlit single-page app — `ui/app.py` (talks to the API over HTTP, no direct DB access)
+* **Auth:** Shared `X-API-Key` header, checked against `APP_API_KEY` — `app/core/security.py`
 * **Containerisation:** Docker Compose (`scrappy_recipes_app`, `scrappy_recipes_db`)
 
 ---
@@ -33,7 +34,7 @@ Scrappy Recipes is an AI-powered recipe extraction and semantic search service b
 
 ### Testing
 `tests/` is a **pytest suite with every LLM and HTTP call mocked** — it needs no API keys, makes
-no network requests, and costs nothing. 132 tests, ~3s.
+no network requests, and costs nothing. 136 tests, ~3s.
 
 * **Run everything:** `venv/bin/python -m pytest`
 * **One file:** `venv/bin/python -m pytest tests/test_router.py`
@@ -55,8 +56,11 @@ parsing/cleaning logic stays under test:
 | `AsyncOpenAI` (embeddings) | patched in `tests/test_persistence.py` |
 | `AsyncSession` | `mock_db_session` (`add` sync; `commit`/`refresh`/`get`/`delete`/`execute`/`scalar` async) |
 
-An autouse `_no_live_api` fixture overwrites both API keys with dummies, so a missing mock fails
-loudly on a stub instead of quietly billing a real request.
+An autouse `_no_live_api` fixture overwrites both LLM API keys with dummies and pins `APP_API_KEY`
+to `TEST_API_KEY` (`tests/conftest.py`), so a missing mock fails loudly on a stub instead of
+quietly billing a real request. Every `TestClient` in the suite is constructed with
+`headers=API_KEY_HEADERS` (also `tests/conftest.py`) so existing tests pass through the auth
+dependency without each one wiring a header by hand.
 
 **Live API checks** — `tests/live/check_*.py` still exercise the real APIs for credential/billing
 /model verification. They are excluded from collection by name and by `norecursedirs`. See
@@ -68,6 +72,8 @@ loudly on a stub instead of quietly billing a real request.
 ```text
 .
 ├── app/
+│   ├── core/
+│   │   └── security.py             # verify_api_key() — X-API-Key header check against APP_API_KEY
 │   ├── database.py                 # Async DB engine & session dependency
 │   ├── main.py                     # FastAPI entry point, lifespan, routes
 │   ├── models.py                   # SQLAlchemy RecipeModel (includes Vector column), MenuModel
@@ -95,6 +101,7 @@ loudly on a stub instead of quietly billing a real request.
 │   ├── test_menu_service.py        # Slot candidate scoring: exclusion, variety penalty, expiry
 │   ├── test_menu_router.py         # Menu endpoint contracts: slot-candidates, confirm
 │   ├── test_shopping_service.py    # Shopping list generation + caching, and its endpoint
+│   ├── test_security.py            # X-API-Key gate: /health public, /api/v1/... 403/200 cases
 │   ├── live/                       # Opt-in real-API checks (not collected by pytest)
 │   │   ├── README.md
 │   │   ├── check_parsers.py
@@ -149,6 +156,23 @@ loudly on a stub instead of quietly billing a real request.
   `GET /api/v1/menus/{menu_id}/shopping-list` (see below).
 - [x] Streamlit UI Tab 4 (Existing Menus): browse saved menus, highlight the active one, and view
   each one's shopping list in a modal dialog (see below).
+- [x] API key authentication on every `/api/v1/...` route, `/health` left public (see below).
+
+### API key authentication
+Every route under `/api/v1/...` requires an `X-API-Key` header matching `APP_API_KEY`; `/health`
+is intentionally exempt since container health probes can't carry a secret. Enforced by
+`verify_api_key()` (`app/core/security.py`, `fastapi.security.APIKeyHeader(auto_error=False)`),
+attached as a `Depends()` — per-route on the bare `@app.get/post/delete` endpoints in `main.py`,
+and once at the `APIRouter(dependencies=[...])` level for `router`/`history_router` in
+`app/routers/menu.py`, rather than globally on the `FastAPI()` app (which would also gate
+`/health`). A missing or wrong key is `403 Forbidden` with `{"detail": "Invalid or missing API
+key"}`. The key is read from `os.environ` inside the dependency (not frozen as a module constant
+at import time) so tests can override it per-run via `monkeypatch.setenv`; it defaults to
+`local_dev_secret_key_123` when unset. The Streamlit UI sends it on every request via a shared
+`requests.Session()` (`ui/app.py`, `api_session`) seeded from `st.secrets.get("APP_API_KEY", ...)`
+falling back to the `APP_API_KEY` env var, then the same default. `show_api_error()` in `ui/app.py`
+special-cases a `403` response into "Authentication failed: Invalid API Key" instead of the
+generic error path.
 
 ### The draft → confirm flow
 Parsing and persistence are deliberately separate. Parse endpoints are **read-only**: they return
@@ -420,8 +444,8 @@ reruns beyond what those two calls return each time.
 - **`app/schemas.py`** uses the Pydantic v1 `class Config` style on `RecipeRead` — deprecated, and
   slated for removal in Pydantic v3. Replace with `model_config = ConfigDict(from_attributes=True)`.
 - **`/confirm` has no duplicate detection.** Submitting the same draft twice creates two rows.
-- **`docker-compose.yml`** still declares `version: '3.8'`, which modern Compose ignores with a
-  warning on every command.
+- **`APP_API_KEY` is a single shared secret**, not per-user credentials — there is no user model,
+  so revoking access for one caller means rotating the key for everyone.
 
 ---
 
@@ -434,3 +458,4 @@ reruns beyond what those two calls return each time.
 | `GEMINI_API_KEY` | image/vision parsing | Forwarded to the `app` container |
 | `POSTGRES_USER` | db + connection strings | Currently `recipe_admin` |
 | `POSTGRES_PASSWORD` | db + connection strings | Falls back to a default if unset |
+| `APP_API_KEY` | `verify_api_key()` (`app/core/security.py`) + Streamlit UI | Shared `X-API-Key` secret; defaults to `local_dev_secret_key_123` if unset. See `.env.example`. |

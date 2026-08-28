@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import verify_api_key
 from app.database import get_db
 from app.models import MenuModel, RecipeModel
 from app.schemas import (
@@ -27,8 +28,8 @@ from app.schemas import (
 from app.services.menu_service import get_slot_candidates
 from app.services.shopping_service import generate_menu_shopping_list
 
-router = APIRouter(prefix="/api/v1/menu", tags=["menu"])
-history_router = APIRouter(prefix="/api/v1/menus", tags=["menu"])
+router = APIRouter(prefix="/api/v1/menu", tags=["menu"], dependencies=[Depends(verify_api_key)])
+history_router = APIRouter(prefix="/api/v1/menus", tags=["menu"], dependencies=[Depends(verify_api_key)])
 
 
 def _parse_exclude_ids(raw: Optional[str]) -> List[int]:

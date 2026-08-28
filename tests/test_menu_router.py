@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.services.menu_service import SlotCandidate
+from tests.conftest import API_KEY_HEADERS
 
 SLOT_CANDIDATES = "/api/v1/menu/slot-candidates"
 CONFIRM = "/api/v1/menu/confirm"
@@ -88,7 +89,7 @@ def api(monkeypatch, mock_db_session):
     main.app.dependency_overrides[main.get_db] = override_get_db
     try:
         yield SimpleNamespace(
-            client=TestClient(main.app),
+            client=TestClient(main.app, headers=API_KEY_HEADERS),
             get_slot_candidates=get_slot_candidates,
             db=mock_db_session,
         )

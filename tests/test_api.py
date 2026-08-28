@@ -18,6 +18,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import API_KEY_HEADERS
+
 PARSE_TEXT = "/api/v1/recipes/parse-text"
 PARSE_URL = "/api/v1/recipes/parse-url"
 PARSE_IMAGES = "/api/v1/recipes/parse-images"
@@ -72,7 +74,7 @@ def api(monkeypatch, sample_recipe, mock_db_session):
     main.app.dependency_overrides[main.get_db] = override_get_db
     try:
         yield SimpleNamespace(
-            client=TestClient(main.app),
+            client=TestClient(main.app, headers=API_KEY_HEADERS),
             route_and_parse=route_and_parse,
             save=save,
             delete=delete,

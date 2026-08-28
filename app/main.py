@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 load_dotenv()
 
+from app.core.security import verify_api_key
 from app.database import Base, engine, get_db
 from app.models import RecipeModel
 from app.routers.menu import history_router as menu_history_router
@@ -71,7 +72,8 @@ async def health_check():
 @app.post(
     "/api/v1/recipes/parse-text",
     response_model=RecipeCreate,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(verify_api_key)],
 )
 async def parse_text(payload: ParseTextRequest):
     """Parse raw copied text into an unsaved draft."""
@@ -84,7 +86,8 @@ async def parse_text(payload: ParseTextRequest):
 @app.post(
     "/api/v1/recipes/parse-url",
     response_model=RecipeCreate,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(verify_api_key)],
 )
 async def parse_url(payload: ParseUrlRequest):
     """Scrape a web URL and parse it into an unsaved draft."""
@@ -99,7 +102,8 @@ async def parse_url(payload: ParseUrlRequest):
 @app.post(
     "/api/v1/recipes/parse-images",
     response_model=RecipeCreate,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(verify_api_key)],
 )
 async def parse_images(
     files: Annotated[List[UploadFile], File(description="Recipe screenshots")],
@@ -125,7 +129,8 @@ async def parse_images(
 @app.post(
     "/api/v1/recipes/confirm",
     response_model=RecipeRead,
-    status_code=status.HTTP_201_CREATED
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(verify_api_key)],
 )
 async def confirm_recipe(payload: RecipeCreate, db: AsyncSession = Depends(get_db)):
     """Persist a reviewed draft, generating its vector embedding on the way in.
@@ -150,7 +155,8 @@ async def confirm_recipe(payload: RecipeCreate, db: AsyncSession = Depends(get_d
 @app.get(
     "/api/v1/recipes",
     response_model=RecipeListResponse,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(verify_api_key)],
 )
 async def list_recipes(
     skip: int = Query(0, ge=0),
@@ -175,7 +181,8 @@ async def list_recipes(
 
 @app.delete(
     "/api/v1/recipes/{recipe_id}",
-    status_code=status.HTTP_204_NO_CONTENT
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(verify_api_key)],
 )
 async def delete_recipe(recipe_id: int, db: AsyncSession = Depends(get_db)):
     """Removes a recipe from PostgreSQL by id."""
@@ -201,7 +208,8 @@ async def delete_recipe(recipe_id: int, db: AsyncSession = Depends(get_db)):
 @app.get(
     "/api/v1/recipes/search",
     response_model=List[RecipeSearchResult],
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(verify_api_key)],
 )
 async def search_recipes(
     q: str = Query(..., description="Natural language query (e.g. 'cold summer soup')"),
@@ -243,7 +251,8 @@ async def search_recipes(
 @app.get(
     "/api/v1/recipes/search-web",
     response_model=List[WebSearchResult],
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(verify_api_key)],
 )
 async def search_recipes_web_endpoint(
     query: str = Query(..., description="Recipe search query, e.g. 'vegan lasagna'"),

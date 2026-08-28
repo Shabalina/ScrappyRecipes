@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.schemas import ShoppingListCategory, ShoppingListItem, ShoppingListResult
 from app.services import shopping_service
+from tests.conftest import API_KEY_HEADERS
 
 SHOPPING_LIST_URL = "/api/v1/menus/{menu_id}/shopping-list"
 
@@ -138,7 +139,7 @@ def api(monkeypatch, mock_db_session):
     main.app.dependency_overrides[main.get_db] = override_get_db
     try:
         yield SimpleNamespace(
-            client=TestClient(main.app),
+            client=TestClient(main.app, headers=API_KEY_HEADERS),
             generate_menu_shopping_list=generate_menu_shopping_list,
             db=mock_db_session,
         )
