@@ -26,7 +26,7 @@ def make_recipe(recipe_id, last_menu_number=None):
 def stub_embedding(monkeypatch):
     """Every test in this module skips the real OpenAI embedding call."""
     monkeypatch.setattr(
-        menu_service, "generate_embedding", AsyncMock(return_value=[0.1] * 1536)
+        menu_service, "generate_embedding", AsyncMock(return_value=[0.1] * 1024)
     )
 
 
@@ -174,6 +174,22 @@ class TestExpiredPenalty:
         )
 
         assert candidates[0].penalty == 0.0
+
+
+class TestMatchScore:
+    async def test_match_score_is_the_inverse_of_final_score(self, mock_db_session):
+        """Display-facing match_score must move opposite to final_score: higher = better."""
+        recipe = make_recipe(1, last_menu_number=9)  # elapsed = 1 -> penalty applies
+
+        set_search_rows(mock_db_session, [(recipe, 0.10)])
+        set_menu_stats(mock_db_session, total_recipes=24, max_menu_number=10)
+
+        candidates = await menu_service.get_slot_candidates(
+            mock_db_session, "pasta", limit=1
+        )
+
+        candidate = candidates[0]
+        assert candidate.match_score == pytest.approx(1 - candidate.final_score)
 
 
 class TestOrderingAndLimit:

@@ -1,6 +1,7 @@
 import os
 from typing import List
 from openai import AsyncOpenAI
+from app.core.config import settings
 from app.schemas import RecipeCreate
 
 def build_recipe_embedding_text(recipe: RecipeCreate) -> str:
@@ -24,13 +25,21 @@ def build_recipe_embedding_text(recipe: RecipeCreate) -> str:
 
 async def generate_embedding(text: str) -> List[float]:
     """
-    Generates a 1536-dimensional vector embedding using OpenAI text-embedding-3-small.
+    Generates a 1024-dimensional vector embedding using OpenAI text-embedding-3-small
+    (truncated natively via `dimensions=1024`), or Amazon Titan Embed Text v2 on
+    Bedrock when AI_PROVIDER=bedrock (see app/services/bedrock_service.py) — both
+    providers share the same `RecipeModel.embedding` column dimension.
     """
+    if settings.AI_PROVIDER == "bedrock":
+        from app.services.bedrock_service import BedrockService
+        return await BedrockService().generate_embedding(text)
+
     # Instantiate client dynamically to ensure environment variables are loaded
     client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    
+
     response = await client.embeddings.create(
         model="text-embedding-3-small",
-        input=text
+        input=text,
+        dimensions=1024,
     )
     return response.data[0].embedding

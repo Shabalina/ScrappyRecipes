@@ -17,6 +17,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import app.services.bedrock_service as bedrock_service
 from app.schemas import IngredientItem, RecipeCreate
 
 TEST_API_KEY = "local_dev_secret_key_123"
@@ -27,12 +28,29 @@ API_KEY_HEADERS = {"X-API-Key": TEST_API_KEY}
 # Safety net
 # --------------------------------------------------------------------------
 
+def _unmocked_bedrock_client(*args, **kwargs):
+    """Fails loudly if a test reaches BedrockService without stubbing boto3.
+
+    AI_PROVIDER defaults to "bedrock" (app/core/config.py) and this host may
+    have real, working AWS credentials — without this guard, a test missing
+    its boto3 mock would silently place a live call to AWS Bedrock instead of
+    failing. See `mock_boto_client` in tests/test_bedrock_service.py for the
+    real stub.
+    """
+    raise RuntimeError(
+        "boto3.client('bedrock-runtime') was called without a mock — this test is "
+        "missing the mock_boto_client fixture (or an AI_PROVIDER override to a "
+        "non-Bedrock provider)."
+    )
+
+
 @pytest.fixture(autouse=True)
 def _no_live_api(monkeypatch):
     """Guarantee no test inherits real credentials from the developer's .env."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key-not-real")
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key-not-real")
     monkeypatch.setenv("APP_API_KEY", TEST_API_KEY)
+    monkeypatch.setattr(bedrock_service.boto3, "client", _unmocked_bedrock_client)
 
 
 # --------------------------------------------------------------------------
@@ -64,25 +82,6 @@ def sample_recipe() -> RecipeCreate:
 # --------------------------------------------------------------------------
 
 @pytest.fixture
-def mock_openai_parse(sample_recipe):
-    """Stub for `openai_client.beta.chat.completions.parse`.
-
-    Mirrors the real return shape: `.choices[0].message.parsed` holds the
-    already-validated Pydantic object. Note the SDK call is synchronous even
-    though it sits inside an `async def`, so this is a MagicMock, not an
-    AsyncMock — an AsyncMock here would return an un-awaited coroutine and the
-    attribute chain would fail.
-    """
-    message = MagicMock()
-    message.parsed = sample_recipe
-    choice = MagicMock()
-    choice.message = message
-    response = MagicMock()
-    response.choices = [choice]
-    return MagicMock(return_value=response)
-
-
-@pytest.fixture
 def mock_gemini_generate(sample_recipe):
     """Stub for `gemini_client.models.generate_content`.
 
@@ -96,20 +95,20 @@ def mock_gemini_generate(sample_recipe):
 
 
 @pytest.fixture
-def parser(monkeypatch, mock_openai_parse, mock_gemini_generate):
-    """A RecipeParserService whose two SDK clients are stubbed.
+def parser(monkeypatch, mock_gemini_generate):
+    """A RecipeParserService with its Gemini client stubbed, for image-parsing tests.
 
-    `RecipeParserService.__init__` constructs `genai.Client()` and `OpenAI()`,
-    both of which validate credentials eagerly, so they are replaced before the
-    service is instantiated.
+    `gemini_client` is a lazy property (constructed on first access, not in
+    `__init__`) — see app/services/llm_parser.py — so `genai` must be replaced
+    before that first access, which is what accessing `service.gemini_client`
+    below triggers. Text parsing/shopping-list generation always go through
+    Bedrock now (no OpenAI opt-out); see tests/test_bedrock_service.py.
     """
     import app.services.llm_parser as llm_parser
 
     monkeypatch.setattr(llm_parser, "genai", MagicMock())
-    monkeypatch.setattr(llm_parser, "OpenAI", MagicMock())
 
     service = llm_parser.RecipeParserService()
-    service.openai_client.beta.chat.completions.parse = mock_openai_parse
     service.gemini_client.models.generate_content = mock_gemini_generate
     return service
 

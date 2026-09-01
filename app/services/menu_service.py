@@ -32,6 +32,7 @@ class SlotCandidate:
     distance: float
     penalty: float
     final_score: float
+    match_score: float
 
 
 async def get_slot_candidates(
@@ -84,12 +85,16 @@ async def get_slot_candidates(
             if 1 <= elapsed <= window:
                 penalty = VARIETY_PENALTY_ALPHA * (window - elapsed + 1) / window
 
+        final_score = recipe_distance + penalty
         candidates.append(
             SlotCandidate(
                 recipe=recipe,
                 distance=recipe_distance,
                 penalty=penalty,
-                final_score=recipe_distance + penalty,
+                final_score=final_score,
+                # Ranking stays on final_score (ascending); this is purely a
+                # higher-is-better presentation of the same number for display.
+                match_score=1 - final_score,
             )
         )
 

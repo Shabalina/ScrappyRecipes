@@ -81,9 +81,52 @@ async def run_alembic_migrations():
         print(f"❌ Error applying migrations: {e}")
         sys.exit(1)
 
+async def run_reembed():
+    """Regenerates every recipe's embedding via Bedrock Titan v2 and overwrites it in place.
+
+    Used after a dimension change (see the 2586f1c1d796 migration) to backfill
+    rows whose embedding was nulled out by the schema change.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from app.models import RecipeModel
+    from app.schemas import RecipeCreate
+    from app.services.bedrock_service import BedrockService
+    from app.services.embedding_service import build_recipe_embedding_text
+
+    print("🔄 Re-embedding all recipes via Bedrock Titan v2...")
+    engine = create_async_engine(APP_DB_URL)
+    session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    bedrock = BedrockService()
+
+    try:
+        async with session_factory() as session:
+            result = await session.execute(select(RecipeModel))
+            recipes = result.scalars().all()
+            print(f"Found {len(recipes)} recipe(s) to re-embed.")
+
+            for recipe in recipes:
+                draft = RecipeCreate.model_validate(recipe, from_attributes=True)
+                text_to_embed = build_recipe_embedding_text(draft)
+                recipe.embedding = await bedrock.generate_embedding(text_to_embed)
+                print(f"  ✅ Re-embedded recipe #{recipe.id}: {recipe.title}")
+
+            await session.commit()
+        print("✅ Re-embedding complete.")
+    except Exception as e:
+        print(f"❌ Error re-embedding recipes: {e}")
+        sys.exit(1)
+    finally:
+        await engine.dispose()
+
 async def main():
     parser = argparse.ArgumentParser(description="Automated Database Management Tool")
     parser.add_argument("--migrate", action="store_true", help="Run Alembic schema migrations.")
+    parser.add_argument(
+        "--reembed",
+        action="store_true",
+        help="Regenerate every recipe's embedding via Bedrock Titan v2 (real AWS calls).",
+    )
     args = parser.parse_args()
 
     # Step 1: Ensure DB exists & vector extension is enabled
@@ -94,6 +137,10 @@ async def main():
         await run_alembic_migrations()
     else:
         print("ℹ️ Skipping migrations (--migrate flag not passed).")
+
+    # Step 3: Re-embed existing recipes, if requested
+    if args.reembed:
+        await run_reembed()
 
 
 if __name__ == "__main__":

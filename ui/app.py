@@ -426,7 +426,7 @@ with meal_plan_tab:
                 cook_time_label = f"{cook_time} min" if cook_time else "—"
                 with st.container(border=True):
                     st.markdown(f"**{recipe.get('title', 'Untitled Recipe')}**")
-                    st.caption(f"Cook time: {cook_time_label} | Match score: {candidate['final_score']:.2f}")
+                    st.caption(f"Cook time: {cook_time_label} | Match score: {candidate['match_score']:.2f}")
                     if st.button("+ Add to Menu", key=f"menu_add_candidate_{recipe['id']}"):
                         st.session_state["menu_draft"].append(recipe)
                         st.session_state.pop("menu_slot_candidates", None)

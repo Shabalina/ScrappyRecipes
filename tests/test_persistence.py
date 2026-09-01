@@ -42,11 +42,18 @@ class TestBuildRecipeEmbeddingText:
 class TestGenerateEmbedding:
     @pytest.fixture
     def mock_embeddings(self, monkeypatch):
-        """Stub AsyncOpenAI; the client is built inside the function, so patch the class."""
+        """Stub AsyncOpenAI; the client is built inside the function, so patch the class.
+
+        Exercises the OpenAI route specifically, so AI_PROVIDER is pinned away
+        from the "bedrock" default (app/core/config.py) — otherwise
+        generate_embedding() would skip this mock and hit the blocked Bedrock path.
+        """
         import app.services.embedding_service as embedding_service
 
+        monkeypatch.setenv("AI_PROVIDER", "gemini")
+
         datum = MagicMock()
-        datum.embedding = [0.1] * 1536
+        datum.embedding = [0.1] * 1024
         response = MagicMock()
         response.data = [datum]
 
@@ -58,13 +65,13 @@ class TestGenerateEmbedding:
         )
         return create
 
-    async def test_returns_1536_dim_vector(self, mock_embeddings):
+    async def test_returns_1024_dim_vector(self, mock_embeddings):
         from app.services.embedding_service import generate_embedding
 
         vector = await generate_embedding("Title: Pancakes")
 
-        # Must match the Vector(1536) column in app/models.py or inserts fail.
-        assert len(vector) == 1536
+        # Must match the Vector(1024) column in app/models.py or inserts fail.
+        assert len(vector) == 1024
         assert all(isinstance(v, float) for v in vector)
 
     async def test_uses_the_expected_embedding_model(self, mock_embeddings):
@@ -75,6 +82,7 @@ class TestGenerateEmbedding:
         kwargs = mock_embeddings.await_args.kwargs
         assert kwargs["model"] == "text-embedding-3-small"
         assert kwargs["input"] == "Title: Pancakes"
+        assert kwargs["dimensions"] == 1024
 
 
 class TestSaveParsedRecipe:
@@ -83,7 +91,7 @@ class TestSaveParsedRecipe:
         import app.services.recipe_db_service as recipe_db_service
 
         monkeypatch.setattr(
-            recipe_db_service, "generate_embedding", AsyncMock(return_value=[0.5] * 1536)
+            recipe_db_service, "generate_embedding", AsyncMock(return_value=[0.5] * 1024)
         )
         return recipe_db_service.RecipeDatabaseService(mock_db_session)
 
@@ -98,7 +106,7 @@ class TestSaveParsedRecipe:
 
         row = mock_db_session.add.call_args.args[0]
         assert row.title == sample_recipe.title
-        assert len(row.embedding) == 1536
+        assert len(row.embedding) == 1024
 
     async def test_serialises_ingredients_to_plain_dicts(
         self, db_service, mock_db_session, sample_recipe

@@ -1,6 +1,7 @@
 # AI Engine Client SDKs
 google-genai
 openai
+boto3
 
 # Data Validation & Schema Modeling
 pydantic

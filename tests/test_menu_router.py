@@ -104,6 +104,7 @@ class TestSlotCandidates:
             distance=0.2,
             penalty=0.05,
             final_score=0.25,
+            match_score=0.75,
         )
         api.get_slot_candidates.return_value = [candidate]
 
@@ -117,6 +118,7 @@ class TestSlotCandidates:
         assert body[0]["distance"] == pytest.approx(0.2)
         assert body[0]["penalty"] == pytest.approx(0.05)
         assert body[0]["final_score"] == pytest.approx(0.25)
+        assert body[0]["match_score"] == pytest.approx(0.75)
 
     def test_no_candidates_returns_empty_list(self, api):
         r = api.client.get(SLOT_CANDIDATES, params={"q": "soup"})

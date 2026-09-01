@@ -20,9 +20,11 @@ class RecipeModel(Base):
     cooking_methods = Column(JSON, default=[])
     tags = Column(JSON, default=[])
 
-    # 💡 1536 dimensions corresponds to OpenAI text-embedding-3-small
-    # For Gemini text-embedding-004, use 768
-    embedding = Column(Vector(1536), nullable=True)
+    # 💡 1024 dimensions: OpenAI text-embedding-3-small is requested with
+    # dimensions=1024 (native Matryoshka truncation), and Bedrock's Titan
+    # Embed Text v2 outputs 1024 natively — both providers share this column
+    # without padding or truncation after the fact.
+    embedding = Column(Vector(1024), nullable=True)
 
 
 class MenuModel(Base):

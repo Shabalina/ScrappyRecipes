@@ -47,7 +47,7 @@ def saved_row_from(recipe, row_id=42):
         instructions=recipe.instructions,
         cooking_methods=recipe.cooking_methods,
         tags=recipe.tags,
-        embedding=[0.25] * 1536,
+        embedding=[0.25] * 1024,
     )
 
 
@@ -175,7 +175,7 @@ class TestConfirmPersists:
         assert r.json()["id"] == 42
 
     def test_confirm_response_omits_the_embedding(self, api, sample_recipe):
-        """The saved row has a 1536-float vector; the response must not carry it."""
+        """The saved row has a 1024-float vector; the response must not carry it."""
         r = api.client.post(CONFIRM, json=sample_recipe.model_dump())
 
         assert "embedding" not in r.json()
@@ -345,7 +345,7 @@ class TestLocalSearch:
         """rows: list of (row, distance) tuples, as pgvector's ORDER BY <=> returns them."""
         import app.main as main
 
-        monkeypatch.setattr(main, "generate_embedding", AsyncMock(return_value=[0.1] * 1536))
+        monkeypatch.setattr(main, "generate_embedding", AsyncMock(return_value=[0.1] * 1024))
         api.db.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
 
     def test_returns_top_result_with_distance(self, api, monkeypatch, sample_recipe):

@@ -133,7 +133,7 @@ class TestNoPersistence:
         async def spy(*_a, **_k):
             nonlocal called
             called = True
-            return [0.0] * 1536
+            return [0.0] * 1024
 
         monkeypatch.setattr(embedding_service, "generate_embedding", spy)
 

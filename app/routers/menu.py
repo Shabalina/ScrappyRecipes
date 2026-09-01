@@ -76,6 +76,7 @@ async def slot_candidates(
             distance=c.distance,
             penalty=c.penalty,
             final_score=c.final_score,
+            match_score=c.match_score,
         )
         for c in candidates
     ]

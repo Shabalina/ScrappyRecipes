@@ -1,16 +1,25 @@
 # CLAUDE.md - Scrappy Recipes Context & Roadmap
 
 ## 1. Project Overview & Architecture
-Scrappy Recipes is an AI-powered recipe extraction and semantic search service built with FastAPI, PostgreSQL + pgvector, and LLMs (OpenAI & Gemini).
+Scrappy Recipes is an AI-powered recipe extraction and semantic search service built with FastAPI, PostgreSQL + pgvector, and LLMs (Amazon Bedrock for text parsing, shopping lists, and embeddings by default; Gemini for image parsing; OpenAI available only as an explicit embeddings opt-out).
 
 * **Backend Framework:** FastAPI (Async)
 * **Database & Vector Store:** PostgreSQL with `pgvector` extension (Dockerized)
 * **ORM & Migrations:** Async SQLAlchemy 2.0 + Alembic
 * **LLMs & Embeddings:**
-  * OpenAI `text-embedding-3-small` (1536 dims) for vector search embeddings — `app/services/embedding_service.py`
-  * OpenAI `gpt-4o-mini` for text recipe parsing — `app/services/llm_parser.py`
+  * **Amazon Bedrock, unconditional for text parsing & shopping lists** (since 2026-09-01) —
+    Claude 3.5 Haiku via `RecipeParserService.parse_text_recipe()` /
+    `.generate_shopping_list()` — `app/services/bedrock_service.py`, `app/services/llm_parser.py`.
+    There is no OpenAI fallback for these two routes anymore; `AI_PROVIDER` has no effect on them.
+  * **Amazon Bedrock, default for embeddings** (`AI_PROVIDER=bedrock`, the default in
+    `app/core/config.py`) — Titan Embed Text v2 — `app/services/bedrock_service.py`.
+  * OpenAI `text-embedding-3-small` (requested at 1024 dims via `dimensions=1024`) for vector
+    search embeddings, available only as an explicit opt-out when `AI_PROVIDER` is set away
+    from `"bedrock"` (e.g. `"gemini"`/`"openai"`) — `app/services/embedding_service.py`. This is
+    the *only* place OpenAI is still reachable in production code.
   * Gemini `gemini-3.5-flash` for vision/multimodal image parsing — `app/services/llm_parser.py`
-    (verified working 2026-08-09)
+    (verified working 2026-08-09). **Always Gemini regardless of `AI_PROVIDER`** — Claude 3.5
+    Haiku is text-only, so there is no Bedrock vision route.
 * **Web Search Fallback:** DuckDuckGo via `ddgs` (`DDGS().text(...)`) — `app/services/web_search_service.py`
 * **UI:** Streamlit single-page app — `ui/app.py` (talks to the API over HTTP, no direct DB access)
 * **Auth:** Shared `X-API-Key` header, checked against `APP_API_KEY` — `app/core/security.py`
@@ -50,14 +59,17 @@ parsing/cleaning logic stays under test:
 
 | Seam | Fixture (`tests/conftest.py`) |
 | --- | --- |
-| `openai_client.beta.chat.completions.parse` | `mock_openai_parse` (sync `MagicMock`, not async) |
 | `gemini_client.models.generate_content` | `mock_gemini_generate` (returns JSON *string*) |
+| `boto3.client("bedrock-runtime").invoke_model` | `mock_boto_client` in `tests/test_bedrock_service.py` |
 | `httpx.AsyncClient` | `httpx.MockTransport` in `tests/test_scraper.py` |
-| `AsyncOpenAI` (embeddings) | patched in `tests/test_persistence.py` |
+| `AsyncOpenAI` (embeddings opt-out only) | patched in `tests/test_persistence.py` |
 | `AsyncSession` | `mock_db_session` (`add` sync; `commit`/`refresh`/`get`/`delete`/`execute`/`scalar` async) |
 
-An autouse `_no_live_api` fixture overwrites both LLM API keys with dummies and pins `APP_API_KEY`
-to `TEST_API_KEY` (`tests/conftest.py`), so a missing mock fails loudly on a stub instead of
+An autouse `_no_live_api` fixture overwrites both LLM API keys with dummies, pins `APP_API_KEY`
+to `TEST_API_KEY`, and replaces `boto3.client` with a function that raises loudly if called
+unmocked (`tests/conftest.py`) — since `AI_PROVIDER` defaults to `"bedrock"`, this is what turns
+an under-mocked test into an immediate, loud failure instead of a live call to AWS Bedrock.
+Together these mean a missing mock fails loudly on a stub instead of
 quietly billing a real request. Every `TestClient` in the suite is constructed with
 `headers=API_KEY_HEADERS` (also `tests/conftest.py`) so existing tests pass through the auth
 dependency without each one wiring a header by hand.
@@ -73,15 +85,20 @@ dependency without each one wiring a header by hand.
 .
 ├── app/
 │   ├── core/
+│   │   ├── config.py                # Settings — AI_PROVIDER + Bedrock env vars, lazily read
 │   │   └── security.py             # verify_api_key() — X-API-Key header check against APP_API_KEY
 │   ├── database.py                 # Async DB engine & session dependency
 │   ├── main.py                     # FastAPI entry point, lifespan, routes
 │   ├── models.py                   # SQLAlchemy RecipeModel (includes Vector column), MenuModel
 │   ├── schemas.py                  # Pydantic schemas (RecipeRead, ParseTextRequest, etc.)
 │   └── services/
-│       ├── embedding_service.py    # generate_embedding() — OpenAI text-embedding-3-small
-│       ├── llm_parser.py           # RecipeParserService: text (OpenAI) + image (Gemini) parsing,
-│                                    # + generate_shopping_list() (OpenAI) for menu aggregation
+│       ├── bedrock_service.py      # BedrockService — Claude 3.5 Haiku (parsing/shopping list) +
+│                                    # Titan Embed Text v2 (embeddings) via boto3 bedrock-runtime
+│       ├── embedding_service.py    # generate_embedding() — OpenAI text-embedding-3-small, or
+│                                    # Bedrock Titan when AI_PROVIDER=bedrock
+│       ├── llm_parser.py           # RecipeParserService: text parsing + generate_shopping_list()
+│                                    # (always Bedrock Claude, lazy client) + image parsing
+│                                    # (always Gemini, lazy client)
 │       ├── menu_service.py         # get_slot_candidates() — scored recipe candidates for a menu slot
 │       ├── recipe_db_service.py    # Recipe persistence helpers (save + delete)
 │       ├── router_service.py       # LLMRouterService for text, url, image routing
@@ -102,6 +119,8 @@ dependency without each one wiring a header by hand.
 │   ├── test_menu_router.py         # Menu endpoint contracts: slot-candidates, confirm
 │   ├── test_shopping_service.py    # Shopping list generation + caching, and its endpoint
 │   ├── test_security.py            # X-API-Key gate: /health public, /api/v1/... 403/200 cases
+│   ├── test_bedrock_service.py     # BedrockService (Claude parsing/shopping list + Titan
+│                                    # embeddings) and AI_PROVIDER dispatch, boto3 stubbed
 │   ├── live/                       # Opt-in real-API checks (not collected by pytest)
 │   │   ├── README.md
 │   │   ├── check_parsers.py
@@ -119,7 +138,7 @@ dependency without each one wiring a header by hand.
 │   └── versions/
 ├── alembic.ini
 ├── pytest.ini                      # asyncio_mode=auto, strict markers, live/ excluded
-├── manage_db.py                    # DB initialization / --migrate script
+├── manage_db.py                    # DB initialization / --migrate / --reembed script
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
@@ -157,6 +176,10 @@ dependency without each one wiring a header by hand.
 - [x] Streamlit UI Tab 4 (Existing Menus): browse saved menus, highlight the active one, and view
   each one's shopping list in a modal dialog (see below).
 - [x] API key authentication on every `/api/v1/...` route, `/health` left public (see below).
+- [x] Amazon Bedrock is now unconditional for text parsing + shopping list consolidation (Claude
+  3.5 Haiku) and the **default** for embeddings (Titan Embed Text v2, `AI_PROVIDER=bedrock`,
+  since 2026-09-01). OpenAI remains available only as an explicit embeddings opt-out; Gemini
+  always handles image parsing (see below).
 
 ### API key authentication
 Every route under `/api/v1/...` requires an `X-API-Key` header matching `APP_API_KEY`; `/health`
@@ -208,8 +231,8 @@ on restart or across multiple workers.
 | `/api/v1/menus/{menu_id}/shopping-list` | GET | 200 / 404 | — → `ShoppingListResult` | **yes** (cache only, on first call) |
 | `/health` | GET | 200 | — | no |
 
-`RecipeRead` does not expose the `embedding` column: it is 1536 floats (~25KB of JSON) per row,
-no client consumes it, and it multiplied `/search` payloads by ~25x. `RecipeSearchResult` (used
+`RecipeRead` does not expose the `embedding` column: it is 1024 floats (~17KB of JSON) per row,
+no client consumes it, and it multiplied `/search` payloads considerably. `RecipeSearchResult` (used
 only by `/search`) is `RecipeRead` plus a `distance: float` field — pgvector's cosine distance
 (`<=>`) between the query embedding and that row, `0` = identical, `2` = opposite. Lower is closer.
 
@@ -313,10 +336,14 @@ resurfacing the same dishes:
    by this score and truncated to `limit`.
 
 Returns a list of `SlotCandidate` dataclasses (`recipe: RecipeModel`, `distance: float`,
-`penalty: float`, `final_score: float`). `GET /api/v1/menu/slot-candidates` (below) wraps each one
-in `SlotCandidateRead` (`recipe: RecipeRead`) for the API boundary. Covered by
+`penalty: float`, `final_score: float`, `match_score: float`). Ranking/truncation still uses
+`final_score` (ascending, lower wins) — `match_score = 1 - final_score` is a purely presentational
+field, added so UI/API consumers can show "higher is a better match" without inverting the sort
+key themselves. `GET /api/v1/menu/slot-candidates` (below) wraps each one in `SlotCandidateRead`
+(`recipe: RecipeRead`) for the API boundary, including `match_score`. Covered by
 `tests/test_menu_service.py` (exclusion via inspecting the compiled `NOT IN` clause params, penalty
-demotion changing rank order, and expired/never-used penalties being exactly `0.0`). The
+demotion changing rank order, expired/never-used penalties being exactly `0.0`, and
+`match_score == 1 - final_score`). The
 per-slot-to-full-menu orchestration (looping this call once per slot, excluding ids already
 placed) lives client-side in the Meal Plan UI tab (see below), not in this service.
 
@@ -366,7 +393,7 @@ categorized grocery list, exposed via `GET /api/v1/menus/{menu_id}/shopping-list
    id that no longer resolves to a row — the same "deleted after the menu was confirmed" tolerance
    as `GET /api/v1/menus`.
 3. **LLM consolidation.** `RecipeParserService.generate_shopping_list()` (`app/services/llm_parser.py`,
-   OpenAI `gpt-4o-mini` via `beta.chat.completions.parse`, mirroring `parse_text_recipe`) is given
+   always Claude 3.5 Haiku on Bedrock, mirroring `parse_text_recipe`) is given
    every recipe's title and ingredients and asked to merge identical/equivalent items into one
    entry with a combined quantity, and group them into grocery sections (Produce, Meat & Seafood,
    Dairy & Refrigerated, Bakery, Pantry & Spices, Other). Structured output is `ShoppingListResult`
@@ -398,7 +425,8 @@ order) and `st.session_state["menu_finalizing"]` (`bool`).
   `Choose Meal {len(menu_draft) + 1} of 6`. A text input + **Find Candidates** button calls
   `GET /api/v1/menu/slot-candidates` with `q=<slot description>` and `exclude_ids` set to the ids
   already in `menu_draft`, so a recipe can't be suggested twice for the same menu. Each of the
-  (up to 3) results renders title, cook time, and `final_score`, with a **+ Add to Menu** button
+  (up to 3) results renders title, cook time, and `match_score` (`1 - final_score`, so higher
+  reads as a better match), with a **+ Add to Menu** button
   that appends `candidate["recipe"]` to `menu_draft` and reruns. Next to the slot input, a
   **Finish Menu Early** button (disabled until at least 1 meal is picked) sets `menu_finalizing =
   True` and reruns, dropping straight to the review screen regardless of how few meals were
@@ -438,6 +466,82 @@ reruns beyond what those two calls return each time.
   name and a `(from: ...)` caption listing source recipe titles. A trailing `st.code` block
   reflows the same categories/items into plain text for pasting into a phone notes app.
 
+### Amazon Bedrock provider — `app/services/bedrock_service.py`
+Uses `boto3.client("bedrock-runtime", region_name=...)` directly (`invoke_model`), not a
+higher-level SDK, so text parsing/shopping-list and Titan embeddings share one client shape.
+`RecipeParserService` (`app/services/llm_parser.py`) constructs its `BedrockService` **lazily**
+via a `bedrock_service` property (constructed on first use, not in `__init__`) — same pattern as
+its `gemini_client` property — so a Bedrock-only deployment with no `GEMINI_API_KEY`/
+`OPENAI_API_KEY` at all doesn't crash at import/startup time; `boto3.client()` itself never
+validates AWS credentials eagerly either. Every embedding/parsing/shopping-list call in the
+codebase goes through the centralized `generate_embedding()` (`app/services/embedding_service.py`)
+and `RecipeParserService` (`app/services/llm_parser.py`) — the menu slot-candidate query embedding
+(`app/services/menu_service.py`), the `/search` query embedding (`app/main.py`), and the
+recipe-confirm embedding (`app/services/recipe_db_service.py`) all call `generate_embedding()`
+rather than any provider SDK directly.
+
+* **Text parsing & shopping list consolidation are Bedrock-only, unconditionally** —
+  `RecipeParserService.parse_text_recipe()` and `.generate_shopping_list()`
+  (`app/services/llm_parser.py`) call `self.bedrock_service` directly with no provider check;
+  `AI_PROVIDER` has no effect on these two routes. The OpenAI `gpt-4o-mini` path that used to serve
+  as their fallback was removed 2026-09-01 (`self.openai_client` and the `openai` import are gone
+  from this file entirely) — that history lives in `tests/test_bedrock_service.py` now, not
+  `tests/test_parsers.py`, which covers Gemini image parsing only.
+  `BedrockService._invoke_claude_tool()` calls `BEDROCK_LLM_MODEL_ID` (default
+  `anthropic.claude-3-5-haiku-20241022-v1:0`) via `invoke_model` with a single tool forced via
+  `tool_choice: {"type": "tool", "name": ...}` — the Bedrock `invoke_model` equivalent of OpenAI's
+  `beta.chat.completions.parse` / Gemini's `response_schema`, since Bedrock's `invoke_model` path
+  has no native structured-output mode. The tool's `input_schema` is generated directly from
+  `RecipeCreate.model_json_schema()` / `ShoppingListResult.model_json_schema()`. **Image parsing
+  stays on Gemini regardless of `AI_PROVIDER`** — Claude 3.5 Haiku is text-only, so there is no
+  Bedrock vision route.
+* **Embeddings still have a provider switch** — `generate_embedding()`
+  (`app/services/embedding_service.py`) checks `settings.AI_PROVIDER` (`app/core/config.py`,
+  lazily read from `os.environ`, defaults to `"bedrock"`) and delegates to
+  `BedrockService.generate_embedding()` (`BEDROCK_EMBEDDING_MODEL_ID`, default
+  `amazon.titan-embed-text-v2:0`, via `invoke_model`) unless it's explicitly set away from
+  `"bedrock"` (e.g. `"gemini"`/`"openai"`), in which case it falls through to OpenAI's
+  `text-embedding-3-small`. This is now the **only** place `AI_PROVIDER` still branches, and the
+  only place OpenAI is still reachable from production code — kept because
+  `RecipeModel.embedding` (`app/models.py`, a `Vector(1024)` column) is a shared, provider-neutral
+  vector store: Titan Embed Text v2 outputs 1024 dims natively (its cap), and the OpenAI opt-out
+  path requests the same size explicitly via `dimensions=1024` (native Matryoshka truncation, not
+  padding), so both write directly comparable vectors into the same column.
+* **Docker Compose** (`docker-compose.yml`) sets `AI_PROVIDER=${AI_PROVIDER:-bedrock}`,
+  `AWS_REGION=${AWS_REGION:-eu-west-1}`, `AWS_PROFILE=${AWS_PROFILE:-default}`, and mounts
+  `~/.aws:/root/.aws:ro` into the `app` container so local developers get working Bedrock calls
+  out of the box, reusing whatever AWS credentials/SSO profile are already configured on the host
+  — no AWS secrets need to be duplicated into `.env`. The mount is read-only, but it does expose
+  the host's full `~/.aws` (all profiles, not just the one in use) inside the container.
+  `OPENAI_API_KEY` is still passed through (`docker-compose.yml`, `.env.example`) and `openai`
+  is still in `requirements.txt` — both are kept deliberately, since the embeddings opt-out above
+  still needs them; they are not dead weight.
+* **Test-suite safety net** — `tests/conftest.py`'s autouse `_no_live_api` fixture patches
+  `bedrock_service.boto3.client` to a function that raises `RuntimeError` by default, the same
+  "fail loudly on a missing mock" guarantee it already gives OpenAI/Gemini keys. This matters
+  specifically because `AI_PROVIDER` defaults to `"bedrock"`: without this guard, any test
+  exercising the real `generate_embedding()`/`parse_text_recipe()`/`generate_shopping_list()`
+  without its own mock would place a live call to AWS Bedrock on a host with working credentials,
+  instead of failing. `tests/test_persistence.py::TestGenerateEmbedding` (the one remaining
+  OpenAI-specific test, for the embeddings opt-out) pins `AI_PROVIDER=gemini` via
+  `monkeypatch.setenv` for that reason.
+* Covered by `tests/test_bedrock_service.py` with `boto3.client("bedrock-runtime")` stubbed:
+  Titan's native 1024-dim output, the `dimensions` request shape, the forced-tool-choice request
+  shape for both Claude routes, and provider-dispatch tests confirming text parsing always routes
+  to Bedrock and that the embeddings opt-out (`AI_PROVIDER=gemini`) still works end-to-end.
+
+### Re-embedding management script — `manage_db.py --reembed`
+`run_reembed()` (`manage_db.py`) fetches every `RecipeModel` row, rebuilds each one's embedding
+text via the existing `build_recipe_embedding_text()` (`app/services/embedding_service.py`, so the
+text fed to the model matches what `/confirm` would have produced), regenerates its embedding via
+`BedrockService.generate_embedding()` — unconditionally, regardless of `AI_PROVIDER` — and commits
+all updates in a single transaction. It connects directly via `create_async_engine(APP_DB_URL)`
+rather than the FastAPI `get_db` dependency, since it runs standalone via
+`python manage_db.py --reembed` (run from the host against the exposed `localhost:5432`, or inside
+the `app` container after a rebuild). Intended for one-off backfills after an embedding-dimension
+or provider change, not routine use — it makes one real Bedrock call per recipe. `--reembed` can be
+combined with `--migrate` in one invocation; migrations run first.
+
 ---
 
 ## 5. Known Issues
@@ -459,3 +563,8 @@ reruns beyond what those two calls return each time.
 | `POSTGRES_USER` | db + connection strings | Currently `recipe_admin` |
 | `POSTGRES_PASSWORD` | db + connection strings | Falls back to a default if unset |
 | `APP_API_KEY` | `verify_api_key()` (`app/core/security.py`) + Streamlit UI | Shared `X-API-Key` secret; defaults to `local_dev_secret_key_123` if unset. See `.env.example`. |
+| `AI_PROVIDER` | `Settings.AI_PROVIDER` (`app/core/config.py`) | `"bedrock"` (default) or `"gemini"`/`"openai"` to opt embeddings back onto OpenAI. Only affects embeddings — text parsing/shopping-list are always Bedrock and image parsing is always Gemini, regardless of this setting. |
+| `AWS_REGION` | `BedrockService` (`app/services/bedrock_service.py`) | Region for the `bedrock-runtime` client. Defaults to `eu-west-1`. Also needs standard AWS credentials available to `boto3` (env vars, shared config, or an instance/task role) — not listed here since `boto3` resolves them itself. In Docker Compose, `~/.aws:/root/.aws:ro` is mounted into the `app` container so the host's existing credentials/SSO profiles work without duplicating secrets into `.env`. |
+| `AWS_PROFILE` | `boto3` (via the mounted `~/.aws`) | Named profile to use from the mounted AWS config/credentials files. Defaults to `default`. Only relevant in Docker Compose — set it if your host uses a non-default named profile for Bedrock access. |
+| `BEDROCK_LLM_MODEL_ID` | `BedrockService` | Defaults to `anthropic.claude-3-5-haiku-20241022-v1:0`. |
+| `BEDROCK_EMBEDDING_MODEL_ID` | `BedrockService` | Defaults to `amazon.titan-embed-text-v2:0`. See the dimension caveat above. |

@@ -30,8 +30,8 @@ class RecipeCreate(BaseModel):
 class RecipeRead(RecipeCreate):
     """A persisted recipe as returned to clients.
 
-    The pgvector `embedding` column is deliberately NOT exposed: it is 1536
-    floats (~25KB of JSON) per row, no client consumes it, and including it in
+    The pgvector `embedding` column is deliberately NOT exposed: it is 1024
+    floats (~17KB of JSON) per row, no client consumes it, and including it in
     list responses like /search multiplies payload size for no benefit.
     """
     id: int
@@ -67,6 +67,7 @@ class SlotCandidateRead(BaseModel):
     distance: float = Field(description="Cosine distance to the slot query embedding.")
     penalty: float = Field(description="Variety penalty from being used in a recent menu.")
     final_score: float = Field(description="distance + penalty; candidates are ranked by this, ascending.")
+    match_score: float = Field(description="1 - final_score; higher is a better match, for display purposes.")
 
 class ShoppingListItem(BaseModel):
     item: str = Field(description="Consolidated grocery item name, e.g. 'Brown Onion'.")

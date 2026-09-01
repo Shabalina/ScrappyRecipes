@@ -1,45 +1,14 @@
-"""RecipeParserService — the two LLM extraction routes, with SDK clients stubbed.
+"""RecipeParserService — image parsing (Gemini), with the SDK client stubbed.
 
 Replaces the former print-based script: these assert on the request the service
 builds and the object it returns, so a regression fails the run.
+
+Text parsing and shopping-list consolidation always go through Claude on
+Bedrock now (no OpenAI opt-out) — that behavior is covered in
+tests/test_bedrock_service.py instead.
 """
 
 from app.schemas import RecipeCreate
-
-
-class TestParseTextRecipe:
-    async def test_returns_validated_recipe(self, parser, sample_recipe):
-        recipe = await parser.parse_text_recipe("2 cups flour, fry them up. Serves 4.")
-
-        assert isinstance(recipe, RecipeCreate)
-        assert recipe.title == sample_recipe.title
-        assert recipe.servings == 4
-        assert [i.name for i in recipe.ingredients] == [
-            "all-purpose flour",
-            "white sugar",
-            "whole milk",
-        ]
-
-    async def test_sends_raw_text_and_schema_to_model(self, parser, mock_openai_parse):
-        await parser.parse_text_recipe("Grandma's messy blog text")
-
-        mock_openai_parse.assert_called_once()
-        kwargs = mock_openai_parse.call_args.kwargs
-
-        assert kwargs["model"] == "gpt-4o-mini"
-        # The schema drives structured output; losing it silently degrades to prose.
-        assert kwargs["response_format"] is RecipeCreate
-
-        roles = [m["role"] for m in kwargs["messages"]]
-        assert roles == ["system", "user"]
-        assert "Grandma's messy blog text" in kwargs["messages"][1]["content"]
-
-    async def test_ingredient_quantities_survive_as_floats(self, parser):
-        recipe = await parser.parse_text_recipe("anything")
-
-        sugar = next(i for i in recipe.ingredients if i.name == "white sugar")
-        assert sugar.quantity == 2.5
-        assert isinstance(sugar.quantity, float)
 
 
 class TestParseImagesRecipe:
