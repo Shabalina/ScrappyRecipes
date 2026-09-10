@@ -10,6 +10,9 @@ pydantic
 fastapi
 uvicorn
 
+# ASGI-to-Lambda bridge (API Gateway HTTP API v2 -> FastAPI)
+mangum
+
 # Environment Configuration Manager
 python-dotenv
 

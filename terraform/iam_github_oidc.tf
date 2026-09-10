@@ -1,0 +1,105 @@
+# GitHub Actions OIDC provider, shared across environments the same way as the ECR
+# repository: only qa creates it (create_github_oidc_provider = true), prod reads it via
+# data source, since AWS allows only one provider per issuer URL per account.
+
+data "tls_certificate" "github_actions" {
+  count = var.create_github_oidc_provider ? 1 : 0
+
+  url = "https://token.actions.githubusercontent.com/.well-known/openid-configuration"
+}
+
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  count = var.create_github_oidc_provider ? 1 : 0
+
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.github_actions[0].certificates[0].sha1_fingerprint]
+
+  tags = local.common_tags
+}
+
+data "aws_iam_openid_connect_provider" "github_actions" {
+  count = var.create_github_oidc_provider ? 0 : 1
+
+  url = "https://token.actions.githubusercontent.com"
+}
+
+locals {
+  github_oidc_provider_arn = var.create_github_oidc_provider ? aws_iam_openid_connect_provider.github_actions[0].arn : data.aws_iam_openid_connect_provider.github_actions[0].arn
+}
+
+# Per-environment role: this apply's github_oidc_allowed_refs/github_repo scope which
+# branches of which repo may assume it, so qa and prod get distinct trust policies even
+# though they share one OIDC provider.
+
+data "aws_iam_policy_document" "github_actions_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [local.github_oidc_provider_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = [for ref in var.github_oidc_allowed_refs : "repo:${var.github_org}/${var.github_repo}:${ref}"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_actions" {
+  name               = "${local.name_prefix}-github-actions"
+  assume_role_policy = data.aws_iam_policy_document.github_actions_assume_role.json
+
+  tags = local.common_tags
+}
+
+data "aws_iam_policy_document" "github_actions_permissions" {
+  statement {
+    sid       = "ECRAuth"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "ECRPush"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+      "ecr:InitiateLayerUpload",
+      "ecr:UploadLayerPart",
+      "ecr:CompleteLayerUpload",
+      "ecr:PutImage",
+    ]
+    resources = [local.ecr_repository_arn]
+  }
+
+  statement {
+    sid    = "LambdaDeploy"
+    effect = "Allow"
+    actions = [
+      "lambda:UpdateFunctionCode",
+      "lambda:GetFunction",
+      "lambda:UpdateFunctionConfiguration",
+    ]
+    resources = [aws_lambda_function.app.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "github_actions" {
+  name   = "${local.name_prefix}-github-actions-cicd"
+  role   = aws_iam_role.github_actions.id
+  policy = data.aws_iam_policy_document.github_actions_permissions.json
+}

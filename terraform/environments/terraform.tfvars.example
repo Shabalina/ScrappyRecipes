@@ -1,0 +1,13 @@
+# Secret values, kept out of qa.tfvars/prod.tfvars so those can be committed.
+#
+# Copy this file to terraform.tfvars per environment (it's gitignored) and fill in real
+# values, e.g.:
+#   cp terraform/environments/terraform.tfvars.example terraform/environments/qa.secrets.tfvars
+# then apply both files together:
+#   terraform apply -var-file=environments/qa.tfvars -var-file=environments/qa.secrets.tfvars
+#
+# Never commit a filled-in copy of this file.
+
+app_api_key    = "replace-with-a-strong-shared-api-key"
+database_url   = "postgresql+asyncpg://recipe_admin:password@host:5432/scrappy_recipes"
+gemini_api_key = "replace-with-your-gemini-api-key"

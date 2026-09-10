@@ -29,6 +29,17 @@ ipython_config.py
 # Variables files (might contain secrets)
 *.tfvars
 *.tfvars.json
+*secrets.tfvars
+*.secrets.tfvars
+
+!terraform/environments/qa.tfvars
+!terraform/environments/prod.tfvars
+!terraform/environments/terraform.tfvars.example
+
+# ...except the checked-in, non-secret per-environment configs and the secrets template
+!terraform/environments/qa.tfvars
+!terraform/environments/prod.tfvars
+!terraform/environments/terraform.tfvars.example
 
 # Crash logs
 crash.log

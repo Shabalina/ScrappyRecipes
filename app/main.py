@@ -3,6 +3,7 @@ from typing import Annotated, List
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
+from mangum import Mangum
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,6 +57,9 @@ router_service = LLMRouterService()
 
 app.include_router(menu_router)
 app.include_router(menu_history_router)
+
+# AWS Lambda entrypoint — API Gateway (HTTP API v2, AWS_PROXY) invokes this per request.
+handler = Mangum(app)
 
 
 @app.get("/health", status_code=status.HTTP_200_OK)

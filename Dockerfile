@@ -1,26 +1,14 @@
-FROM python:3.11-slim
+# AWS Lambda's container runtime interface client: CMD below is a handler
+# reference ("module.path.handler"), not a shell command — the base image's
+# ENTRYPOINT (/lambda-entrypoint.sh) loads it and invokes it per request.
+FROM public.ecr.aws/lambda/python:3.11
 
-# Prevent Python from writing .pyc files & enable unbuffered logging
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-WORKDIR /app
-
-# Install system-level build tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies first (leveraging Docker caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies first (leveraging Docker layer caching)
+COPY requirements.txt ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt
 
 # Copy application source code
-COPY . .
+COPY . ${LAMBDA_TASK_ROOT}/
 
-# Expose FastAPI port
-EXPOSE 8000
-
-# Run DB checks/migrations first, then start Uvicorn production server
-CMD ["sh", "-c", "python manage_db.py --migrate && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# Mangum-wrapped FastAPI app (app/main.py:handler), invoked by API Gateway via AWS_PROXY
+CMD ["app.main.handler"]
