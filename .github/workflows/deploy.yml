@@ -1,0 +1,106 @@
+name: Deploy Scrappy Recipes
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+  ECR_REPOSITORY: scrappy-recipes
+  TARGET_ENV: ${{ github.ref_name == 'main' && 'prod' || 'qa' }}
+  IMAGE_TAG: ${{ github.ref_name == 'main' && 'prod-latest' || 'qa-latest' }}
+
+jobs:
+  build-and-plan:
+    name: Build Image & Terraform Plan
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prod' || 'qa' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push Docker image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "Building $IMAGE_URI..."
+          docker build -t "$IMAGE_URI" .
+          echo "Pushing $IMAGE_URI to ECR..."
+          docker push "$IMAGE_URI"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+
+      - name: Terraform Init & Plan
+        working-directory: terraform
+        env:
+          TF_VAR_app_api_key: ${{ secrets.APP_API_KEY }}
+          TF_VAR_database_url: ${{ secrets.DATABASE_URL }}
+          TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          terraform init
+          terraform workspace select -or-create ${{ env.TARGET_ENV }}
+          terraform plan \
+            -var-file=environments/${{ env.TARGET_ENV }}.tfvars \
+            -out=tfplan
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ env.TARGET_ENV }}
+          path: terraform/tfplan
+
+  apply:
+    name: Terraform Apply
+    needs: build-and-plan
+    runs-on: ubuntu-latest
+    # This environment gate triggers the manual approval pause on Prod
+    environment: ${{ github.ref_name == 'main' && 'prod' || 'qa' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ env.TARGET_ENV }}
+          path: terraform
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: |
+          terraform init
+          terraform workspace select ${{ env.TARGET_ENV }}
+          terraform apply -auto-approve tfplan
