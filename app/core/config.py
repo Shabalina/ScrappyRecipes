@@ -15,7 +15,7 @@ class Settings:
 
     @property
     def AWS_REGION(self) -> str:
-        return os.environ.get("AWS_REGION", "eu-west-1")
+        return os.environ.get("AWS_REGION", "us-east-1")
 
     @property
     def BEDROCK_LLM_MODEL_ID(self) -> str:

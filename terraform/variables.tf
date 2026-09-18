@@ -12,7 +12,7 @@ variable "environment" {
 variable "aws_region" {
   description = "AWS region to deploy into."
   type        = string
-  default     = "eu-west-1"
+  default     = "us-east-1"
 }
 
 variable "project_name" {

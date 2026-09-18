@@ -2,7 +2,7 @@
 # provider) — apply this environment first.
 
 environment = "qa"
-aws_region  = "eu-west-1"
+aws_region  = "us-east-1"
 
 create_ecr_repository       = true
 create_github_oidc_provider = true

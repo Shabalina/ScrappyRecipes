@@ -2,7 +2,7 @@
 # provider) via data source instead of recreating them — apply qa first.
 
 environment = "prod"
-aws_region  = "eu-west-1"
+aws_region  = "us-east-1"
 
 create_ecr_repository       = false
 create_github_oidc_provider = false

@@ -508,7 +508,7 @@ rather than any provider SDK directly.
   path requests the same size explicitly via `dimensions=1024` (native Matryoshka truncation, not
   padding), so both write directly comparable vectors into the same column.
 * **Docker Compose** (`docker-compose.yml`) sets `AI_PROVIDER=${AI_PROVIDER:-bedrock}`,
-  `AWS_REGION=${AWS_REGION:-eu-west-1}`, `AWS_PROFILE=${AWS_PROFILE:-default}`, and mounts
+  `AWS_REGION=${AWS_REGION:-us-east-1}`, `AWS_PROFILE=${AWS_PROFILE:-default}`, and mounts
   `~/.aws:/root/.aws:ro` into the `app` container so local developers get working Bedrock calls
   out of the box, reusing whatever AWS credentials/SSO profile are already configured on the host
   — no AWS secrets need to be duplicated into `.env`. The mount is read-only, but it does expose
