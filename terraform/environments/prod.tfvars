@@ -9,9 +9,6 @@ create_github_oidc_provider = false
 
 github_org  = "Shabalina"
 github_repo = "ScrappyRecipes"
-github_oidc_allowed_refs = [
-  "ref:refs/heads/main",
-]
 
 image_tag = "prod-latest"
 

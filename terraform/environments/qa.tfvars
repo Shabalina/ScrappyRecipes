@@ -9,10 +9,6 @@ create_github_oidc_provider = true
 
 github_org  = "Shabalina"
 github_repo = "ScrappyRecipes"
-github_oidc_allowed_refs = [
-  "ref:refs/heads/main",
-  "ref:refs/heads/develop",
-]
 
 image_tag = "qa-latest"
 
