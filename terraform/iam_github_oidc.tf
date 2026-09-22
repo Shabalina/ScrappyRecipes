@@ -97,7 +97,10 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "lambda:GetFunction",
       "lambda:UpdateFunctionConfiguration",
     ]
-    resources = [aws_lambda_function.app.arn]
+    # resources = [aws_lambda_function.app.arn]
+    resources = [
+      "arn:aws:lambda:*:*:function:${local.name_prefix}-*"
+    ]
   }
 }
 

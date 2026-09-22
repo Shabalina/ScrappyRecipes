@@ -7,8 +7,8 @@ aws_region  = "us-east-1"
 create_ecr_repository       = true
 create_github_oidc_provider = true
 
-github_org  = "Shabalina"
-github_repo = "ScrappyRecipes"
+github_org  = "Shabalina@7123395"
+github_repo = "ScrappyRecipes@1306496647"
 
 image_tag = "qa-latest"
 

@@ -3,6 +3,9 @@
 # ENTRYPOINT (/lambda-entrypoint.sh) loads it and invokes it per request.
 FROM public.ecr.aws/lambda/python:3.11
 
+# Upgrade pip, setuptools, and wheel so pre-compiled wheels are always preferred
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
 # Install Python dependencies first (leveraging Docker layer caching)
 COPY requirements.txt ${LAMBDA_TASK_ROOT}/
 RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt

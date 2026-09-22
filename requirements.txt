@@ -10,7 +10,7 @@ pydantic
 fastapi
 uvicorn
 
-# ASGI-to-Lambda bridge (API Gateway HTTP API v2 -> FastAPI)
+# ASGI-to-Lambda bridge
 mangum
 
 # Environment Configuration Manager
@@ -26,16 +26,10 @@ ddgs
 
 python-multipart
 
-# Testing (mocked unit/integration suite — no live API calls)
-pytest
-pytest-asyncio
-
 # Vector Database Support
 pgvector>=0.2.0
 sqlalchemy[asyncio]>=2.0.0
 asyncpg>=0.29.0
 alembic>=1.13.0
 
-# UI
-streamlit
 requests

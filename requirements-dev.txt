@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Testing & Linting
+pytest
+pytest-asyncio
+httpx
