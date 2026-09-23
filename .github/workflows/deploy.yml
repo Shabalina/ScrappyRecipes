@@ -54,34 +54,23 @@ jobs:
           IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           echo "Checking if $IMAGE_URI already exists in ECR..."
 
-          set +e
-          DESCRIBE_OUTPUT=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --region "$AWS_REGION" 2>&1)
-          STATUS=$?
-          set -e
+          # Query ECR to see if the tag exists in the repository
+          EXISTING_TAG=$(aws ecr list-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --query "imageIds[?imageTag=='$IMAGE_TAG'].imageTag" \
+            --output text \
+            --region "$AWS_REGION")
 
-          echo "Status code: $STATUS"
-          echo "CLI Output: $DESCRIBE_OUTPUT"
+          echo "Found tag in ECR: '$EXISTING_TAG'"
 
-          if [ $STATUS -eq 0 ]; then
+          if [ "$EXISTING_TAG" = "$IMAGE_TAG" ]; then
             echo "Image $IMAGE_URI already exists in ECR. Skipping build and push."
-          elif echo "$DESCRIBE_OUTPUT" | grep -q "ImageNotFoundException"; then
+          else
             echo "Image not found in ECR. Building $IMAGE_URI..."
             docker build -t "$IMAGE_URI" .
             echo "Pushing $IMAGE_URI to ECR..."
             docker push "$IMAGE_URI"
-          else
-            echo "Error calling ECR: $DESCRIBE_OUTPUT"
-            exit 1
           fi
-
-          # if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" > /dev/null 2>&1; then
-          #   echo "Image $IMAGE_URI already exists in ECR. Skipping build and push."
-          # else
-          #   echo "Image not found in ECR. Building $IMAGE_URI..."
-          #   docker build -t "$IMAGE_URI" .
-          #   echo "Pushing $IMAGE_URI to ECR..."
-          #   docker push "$IMAGE_URI"
-          # fi
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3

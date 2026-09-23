@@ -87,6 +87,7 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "ecr:PutImage",
       "ecr:DescribeRepositories",
       "ecr:ListImages",
+      "ecr:DescribeImages",
       "ecr:ListTagsForResource",
       "ecr:CreateRepository",
       "ecr:DeleteRepository",
