@@ -14,7 +14,7 @@ env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: scrappy-recipes
   TARGET_ENV: ${{ github.ref_name == 'main' && 'prod' || 'qa' }}
-  IMAGE_TAG: ${{ github.ref_name == 'main' && 'prod-latest' || 'qa-latest' }}
+  IMAGE_TAG: ${{ github.ref_name == 'main' && format('prod-{0}', github.sha) || format('qa-{0}', github.sha) }}
 
 jobs:
   build-and-plan:
@@ -68,6 +68,7 @@ jobs:
           TF_VAR_app_api_key: ${{ secrets.APP_API_KEY }}
           TF_VAR_database_url: ${{ secrets.DATABASE_URL }}
           TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
         run: |
           terraform init
           terraform workspace select -or-create ${{ env.TARGET_ENV }}
