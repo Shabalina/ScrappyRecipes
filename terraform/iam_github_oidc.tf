@@ -85,17 +85,42 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "ecr:UploadLayerPart",
       "ecr:CompleteLayerUpload",
       "ecr:PutImage",
+      "ecr:DescribeRepositories",
+      "ecr:ListImages",
+      "ecr:CreateRepository",
+      "ecr:DeleteRepository",
+      "ecr:PutImageScanningConfiguration",
+      "ecr:PutImageTagMutability"
     ]
     resources = [local.ecr_repository_arn]
+  }
+
+  statement {
+    sid    = "IAMManagement"
+    effect = "Allow"
+    actions = [
+      "iam:GetOpenIDConnectProvider",
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies"
+    ]
+    resources = ["*"]
   }
 
   statement {
     sid    = "LambdaDeploy"
     effect = "Allow"
     actions = [
-      "lambda:UpdateFunctionCode",
       "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:CreateFunction",
+      "lambda:UpdateFunctionCode",
       "lambda:UpdateFunctionConfiguration",
+      "lambda:DeleteFunction",
+      "lambda:AddPermission",
+      "lambda:RemovePermission",
+      "lambda:GetPolicy"
     ]
     # resources = [aws_lambda_function.app.arn]
     resources = [
