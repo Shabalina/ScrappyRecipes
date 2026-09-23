@@ -6,6 +6,16 @@ on:
       - develop
       - main
 
+    paths:
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'app/**'
+      - 'alembic/**'
+      - 'alembic.ini'
+      - 'manage_db.py'
+      - 'terraform/**'
+      - '.github/workflows/deploy.yml'
+
 permissions:
   id-token: write
   contents: read
@@ -52,10 +62,16 @@ jobs:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          echo "Building $IMAGE_URI..."
-          docker build -t "$IMAGE_URI" .
-          echo "Pushing $IMAGE_URI to ECR..."
-          docker push "$IMAGE_URI"
+          echo "Checking if $IMAGE_URI already exists in ECR..."
+
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" > /dev/null 2>&1; then
+            echo "Image $IMAGE_URI already exists in ECR. Skipping build and push."
+          else
+            echo "Image not found in ECR. Building $IMAGE_URI..."
+            docker build -t "$IMAGE_URI" .
+            echo "Pushing $IMAGE_URI to ECR..."
+            docker push "$IMAGE_URI"
+          fi
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
