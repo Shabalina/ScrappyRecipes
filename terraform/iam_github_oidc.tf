@@ -102,6 +102,34 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "arn:aws:lambda:*:*:function:${local.name_prefix}-*"
     ]
   }
+
+  statement {
+    sid    = "TerraformStateS3"
+    effect = "Allow"
+    actions = [
+      "s3:ListBucket",
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject"
+    ]
+    resources = [
+      "arn:aws:s3:::terraform-state-bucket-sha",
+      "arn:aws:s3:::terraform-state-bucket-sha/*"
+    ]
+  }
+
+  statement {
+    sid    = "TerraformStateDynamoDB"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:DeleteItem"
+    ]
+    resources = [
+      "arn:aws:dynamodb:*:*:table/terraform-lock"
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "github_actions" {

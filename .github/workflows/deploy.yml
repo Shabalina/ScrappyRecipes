@@ -114,5 +114,5 @@ jobs:
         working-directory: terraform
         run: |
           terraform init
-          terraform workspace select ${{ env.TARGET_ENV }}
+          terraform workspace select -or-create ${{ env.TARGET_ENV }}
           terraform apply -auto-approve tfplan
