@@ -36,16 +36,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Inspect GitHub OIDC Token Payload
-        run: |
-          # Request raw JWT token from GitHub internal runner
-          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
-
-          echo "=== Decoded JWT Payload ==="
-          # Decode the middle payload portion of the JWT (base64)
-          echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq .
-
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -64,14 +54,34 @@ jobs:
           IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           echo "Checking if $IMAGE_URI already exists in ECR..."
 
-          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" > /dev/null 2>&1; then
+          set +e
+          DESCRIBE_OUTPUT=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --region "$AWS_REGION" 2>&1)
+          STATUS=$?
+          set -e
+
+          echo "Status code: $STATUS"
+          echo "CLI Output: $DESCRIBE_OUTPUT"
+
+          if [ $STATUS -eq 0 ]; then
             echo "Image $IMAGE_URI already exists in ECR. Skipping build and push."
-          else
+          elif echo "$DESCRIBE_OUTPUT" | grep -q "ImageNotFoundException"; then
             echo "Image not found in ECR. Building $IMAGE_URI..."
             docker build -t "$IMAGE_URI" .
             echo "Pushing $IMAGE_URI to ECR..."
             docker push "$IMAGE_URI"
+          else
+            echo "Error calling ECR: $DESCRIBE_OUTPUT"
+            exit 1
           fi
+
+          # if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" > /dev/null 2>&1; then
+          #   echo "Image $IMAGE_URI already exists in ECR. Skipping build and push."
+          # else
+          #   echo "Image not found in ECR. Building $IMAGE_URI..."
+          #   docker build -t "$IMAGE_URI" .
+          #   echo "Pushing $IMAGE_URI to ECR..."
+          #   docker push "$IMAGE_URI"
+          # fi
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
