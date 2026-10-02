@@ -60,7 +60,7 @@ resource "aws_lambda_function" "app" {
   environment {
     variables = {
       AI_PROVIDER    = var.ai_provider
-      AWS_REGION     = var.aws_region
+      # AWS_REGION     = var.aws_region
       APP_API_KEY    = var.app_api_key
       DATABASE_URL   = var.database_url
       GEMINI_API_KEY = var.gemini_api_key

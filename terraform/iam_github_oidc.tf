@@ -92,7 +92,10 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "ecr:CreateRepository",
       "ecr:DeleteRepository",
       "ecr:PutImageScanningConfiguration",
-      "ecr:PutImageTagMutability"
+      "ecr:PutImageTagMutability",
+      "ecr:PutLifecyclePolicy",
+      "ecr:GetLifecyclePolicy",
+      "ecr:DeleteLifecyclePolicy"
     ]
     resources = [local.ecr_repository_arn]
   }
@@ -101,11 +104,29 @@ data "aws_iam_policy_document" "github_actions_permissions" {
     sid    = "IAMManagement"
     effect = "Allow"
     actions = [
-      "iam:GetOpenIDConnectProvider",
+      "iam:CreateRole",
+      "iam:DeleteRole",
       "iam:GetRole",
       "iam:GetRolePolicy",
       "iam:ListRolePolicies",
-      "iam:ListAttachedRolePolicies"
+      "iam:ListAttachedRolePolicies",
+      "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:PassRole",
+      "iam:GetOpenIDConnectProvider"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "APIGatewayManagement"
+    effect = "Allow"
+    actions = [
+      "apigateway:*"
     ]
     resources = ["*"]
   }
@@ -122,11 +143,15 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "lambda:DeleteFunction",
       "lambda:AddPermission",
       "lambda:RemovePermission",
-      "lambda:GetPolicy"
+      "lambda:GetPolicy",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:ListTags"
     ]
     # resources = [aws_lambda_function.app.arn]
     resources = [
-      "arn:aws:lambda:*:*:function:${local.name_prefix}-*"
+      "arn:aws:lambda:*:*:function:${local.name_prefix}",
+      "arn:aws:lambda:*:*:function:${local.name_prefix}*"
     ]
   }
 
