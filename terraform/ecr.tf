@@ -75,3 +75,26 @@ resource "aws_ecr_lifecycle_policy" "app" {
     ]
   })
 }
+
+resource "aws_ecr_repository_policy" "lambda_access" {
+  count = var.create_ecr_repository ? 1 : 0
+
+  repository = aws_ecr_repository.app[0].name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "LambdaECRImageRetrievalPolicy"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = [
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer"
+        ]
+      }
+    ]
+  })
+}

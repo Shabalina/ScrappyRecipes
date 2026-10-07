@@ -95,7 +95,10 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "ecr:PutImageTagMutability",
       "ecr:PutLifecyclePolicy",
       "ecr:GetLifecyclePolicy",
-      "ecr:DeleteLifecyclePolicy"
+      "ecr:DeleteLifecyclePolicy",
+      "ecr:GetRepositoryPolicy",    # <--- Required for reading/planning
+      "ecr:SetRepositoryPolicy",    # <--- Required for creating/updating
+      "ecr:DeleteRepositoryPolicy"  # <--- Required if removing the policy
     ]
     resources = [local.ecr_repository_arn]
   }
@@ -116,10 +119,21 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "iam:DeleteRolePolicy",
       "iam:TagRole",
       "iam:UntagRole",
-      "iam:PassRole",
       "iam:GetOpenIDConnectProvider"
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid       = "PassRoleToLambda"
+    effect    = "Allow"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::470311829219:role/scrappy-recipes-*-lambda-exec"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["lambda.amazonaws.com"]
+    }
   }
 
   statement {
@@ -141,6 +155,10 @@ data "aws_iam_policy_document" "github_actions_permissions" {
       "lambda:UpdateFunctionCode",
       "lambda:UpdateFunctionConfiguration",
       "lambda:DeleteFunction",
+      "lambda:ListVersionsByFunction",     # <--- Required for version refresh
+      "lambda:PublishVersion",             # <--- Required if publish = true
+      "lambda:ListAliases",
+      "lambda:GetAlias",
       "lambda:AddPermission",
       "lambda:RemovePermission",
       "lambda:GetPolicy",
