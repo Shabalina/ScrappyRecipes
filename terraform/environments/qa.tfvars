@@ -10,7 +10,7 @@ create_github_oidc_provider = true
 github_org  = "Shabalina@7123395"
 github_repo = "ScrappyRecipes@1306496647"
 
-image_tag = "qa-latest"
+# image_tag = "qa-latest"
 
 lambda_memory_size = 1024
 lambda_timeout     = 30

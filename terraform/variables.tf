@@ -82,7 +82,6 @@ variable "bedrock_embedding_model_id" {
 variable "image_tag" {
   description = "ECR image tag the Lambda function deploys. CI pushes environment-specific tags (e.g. qa-<sha>, prod-<sha>)."
   type        = string
-  default     = "qa-latest"
 }
 
 variable "lambda_memory_size" {
