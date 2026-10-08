@@ -36,10 +36,10 @@ async def lifespan(app: FastAPI):
     1. Enables pgvector extension in PostgreSQL.
     2. Creates missing database tables.
     """
-    async with engine.begin() as conn:
-        # Enable pgvector if using PostgreSQL with vector support
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-        await conn.run_sync(Base.metadata.create_all)
+    # async with engine.begin() as conn:
+    #     # Enable pgvector if using PostgreSQL with vector support
+    #     await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+    #     await conn.run_sync(Base.metadata.create_all)
     yield
     # Cleanup on shutdown
     await engine.dispose()
@@ -59,7 +59,7 @@ app.include_router(menu_router)
 app.include_router(menu_history_router)
 
 # AWS Lambda entrypoint — API Gateway (HTTP API v2, AWS_PROXY) invokes this per request.
-handler = Mangum(app)
+handler = Mangum(app, lifespan="off")
 
 
 @app.get("/health", status_code=status.HTTP_200_OK)
