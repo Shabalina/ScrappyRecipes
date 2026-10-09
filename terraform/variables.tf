@@ -121,3 +121,8 @@ variable "gemini_api_key" {
   type        = string
   sensitive   = true
 }
+
+variable "neon_org_id" {
+  description = "The Neon organization ID (org-...)"
+  type        = string
+}
