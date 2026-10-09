@@ -119,7 +119,7 @@ jobs:
       - name: Install Migration Dependencies
         run: |
           pip install --upgrade pip
-          pip install alembic asyncpg sqlalchemy psycopg2-binary
+          pip install alembic asyncpg sqlalchemy psycopg2-binary python-dotenv
 
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
