@@ -110,11 +110,11 @@ variable "app_api_key" {
   sensitive   = true
 }
 
-variable "database_url" {
-  description = "Async SQLAlchemy DATABASE_URL for this environment's Postgres instance."
-  type        = string
-  sensitive   = true
-}
+# variable "database_url" {
+#   description = "Async SQLAlchemy DATABASE_URL for this environment's Postgres instance."
+#   type        = string
+#   sensitive   = true
+# }
 
 variable "gemini_api_key" {
   description = "Gemini API key for image/vision parsing (always required regardless of AI_PROVIDER)."
