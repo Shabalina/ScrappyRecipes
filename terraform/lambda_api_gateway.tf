@@ -62,7 +62,8 @@ resource "aws_lambda_function" "app" {
       AI_PROVIDER    = var.ai_provider
       # AWS_REGION     = var.aws_region
       APP_API_KEY    = var.app_api_key
-      DATABASE_URL   = var.database_url
+      # DATABASE_URL   = var.database_url
+      DATABASE_URL   = "${local.neon_async_url}?ssl=require"
       GEMINI_API_KEY = var.gemini_api_key
     }
   }

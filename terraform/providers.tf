@@ -17,6 +17,11 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+
+    neon = {
+      source  = "kislerdm/neon"
+      version = "~> 0.18"
+    }
   }
 }
 
@@ -26,4 +31,8 @@ provider "aws" {
   default_tags {
     tags = local.common_tags
   }
+}
+
+provider "neon" {
+  # Automatically picks up NEON_API_KEY from environment variables
 }

@@ -81,7 +81,8 @@ jobs:
         working-directory: terraform
         env:
           TF_VAR_app_api_key: ${{ secrets.APP_API_KEY }}
-          TF_VAR_database_url: ${{ secrets.DATABASE_URL_QA }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          # TF_VAR_database_url: ${{ secrets.DATABASE_URL_QA }}
           TF_VAR_gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           TF_VAR_image_tag: ${{ env.IMAGE_TAG }}
         run: |
@@ -98,7 +99,7 @@ jobs:
           path: terraform/tfplan
 
   apply:
-    name: Terraform Apply
+    name: Terraform Apply & Migrate
     needs: build-and-plan
     runs-on: ubuntu-latest
     # This environment gate triggers the manual approval pause on Prod
@@ -107,6 +108,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup Python for Migrations
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Migration Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install alembic asyncpg sqlalchemy psycopg2-binary
 
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -128,7 +140,22 @@ jobs:
 
       - name: Terraform Apply
         working-directory: terraform
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
         run: |
           terraform init
           terraform workspace select -or-create ${{ env.TARGET_ENV }}
           terraform apply -auto-approve tfplan
+
+      - name: Run Alembic Database Migrations
+        working-directory: .
+        run: |
+          # 1. Extract the sensitive database URL from Terraform output
+          cd terraform
+          DB_URL=$(terraform output -raw database_url)
+          cd ..
+
+          # 2. Execute migrations against the database
+          echo "Applying migrations to Neon PostgreSQL..."
+          DATABASE_URL="$DB_URL" alembic upgrade head
+          echo "Database migrations completed successfully."

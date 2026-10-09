@@ -22,3 +22,9 @@ output "lambda_function_arn" {
   description = "ARN of the deployed Lambda function."
   value       = aws_lambda_function.app.arn
 }
+
+output "database_url" {
+  description = "Async SQLAlchemy connection URL for the environment database"
+  value       = "${local.neon_async_url}?ssl=require"
+  sensitive   = true
+}
