@@ -35,16 +35,16 @@ TARGET_DB_NAME = os.getenv("POSTGRES_DB", "scrappy_recipes")
 DEFAULT_APP_URL = f"postgresql+asyncpg://{USER}:{PASSWORD}@{HOST}:{PORT}/{TARGET_DB_NAME}"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_APP_URL)
 
-# Normalize URL for asyncpg:
-# asyncpg fails if 'sslmode=' is present; it requires 'ssl='
-if "sslmode=" in DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace("sslmode=", "ssl=")
-
 # Ensure the driver is postgresql+asyncpg://
 if DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+asyncpg://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 elif DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+
+# Strip all query parameters (?sslmode=..., ?ssl=...) from the DSN string
+# to prevent asyncpg parameter collision
+if "?" in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.split("?")[0]
 
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
@@ -72,10 +72,16 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_async_migrations() -> None:
     """Run migrations in 'online' mode with async engine."""
+
+    # Enable SSL for remote hosts (e.g. Neon), disable for local development
+    is_remote = "neon.tech" in DATABASE_URL or os.getenv("ENVIRONMENT") in ["qa", "prod"]
+    connect_args = {"ssl": "require"} if is_remote else {}
+
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
 
     async with connectable.connect() as connection:
